@@ -1,0 +1,486 @@
+{
+  "passed": 80,
+  "failed": 0,
+  "results": [
+    {
+      "test": "example-chat/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-chat/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-chat/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=chat"
+    },
+    {
+      "test": "example-worker/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-worker/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "2 actions"
+    },
+    {
+      "test": "example-worker/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-worker/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "example-worker/invoke-blocked",
+      "ok": true,
+      "status": 422,
+      "detail": "chat disabled → 422"
+    },
+    {
+      "test": "example-worker/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=worker"
+    },
+    {
+      "test": "example-file-intake/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-file-intake/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-file-intake/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "example-file-intake/invoke-blocked",
+      "ok": true,
+      "status": 422,
+      "detail": "chat disabled → 422"
+    },
+    {
+      "test": "example-file-intake/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=file_intake"
+    },
+    {
+      "test": "example-supervisor/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-supervisor/links",
+      "ok": true,
+      "status": 200,
+      "detail": "3 links"
+    },
+    {
+      "test": "example-supervisor/graph",
+      "ok": true,
+      "status": 200,
+      "detail": "graph ok"
+    },
+    {
+      "test": "example-supervisor/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-supervisor/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=supervisor"
+    },
+    {
+      "test": "example-custom/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-custom/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "1 actions"
+    },
+    {
+      "test": "example-custom/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-custom/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "example-custom/links",
+      "ok": true,
+      "status": 200,
+      "detail": "1 links"
+    },
+    {
+      "test": "example-custom/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-custom/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "example-custom/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-custom/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=custom"
+    },
+    {
+      "test": "example-chat-files/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-chat-files/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "example-chat-files/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-chat-files/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "example-chat-files/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-chat-files/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=chat"
+    },
+    {
+      "test": "example-worker-chat/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-worker-chat/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "1 actions"
+    },
+    {
+      "test": "example-worker-chat/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-worker-chat/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "example-worker-chat/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-worker-chat/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=worker"
+    },
+    {
+      "test": "example-orchestrator/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "example-orchestrator/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "1 actions"
+    },
+    {
+      "test": "example-orchestrator/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-orchestrator/links",
+      "ok": true,
+      "status": 200,
+      "detail": "2 links"
+    },
+    {
+      "test": "example-orchestrator/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "example-orchestrator/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=custom"
+    },
+    {
+      "test": "payroll/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "payroll/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "1 actions"
+    },
+    {
+      "test": "payroll/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "payroll/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "payroll/invoke-blocked",
+      "ok": true,
+      "status": 422,
+      "detail": "chat disabled → 422"
+    },
+    {
+      "test": "payroll/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=worker"
+    },
+    {
+      "test": "bank-recon/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "bank-recon/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "bank-recon/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "bank-recon/invoke-blocked",
+      "ok": true,
+      "status": 422,
+      "detail": "chat disabled → 422"
+    },
+    {
+      "test": "bank-recon/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=file_intake"
+    },
+    {
+      "test": "invoice/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "invoice/actions",
+      "ok": true,
+      "status": 200,
+      "detail": "1 actions"
+    },
+    {
+      "test": "invoice/action-run",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "invoice/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "invoice/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "invoice/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=chat"
+    },
+    {
+      "test": "resume/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "resume/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "resume/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "resume/invoke-blocked",
+      "ok": true,
+      "status": 422,
+      "detail": "chat disabled → 422"
+    },
+    {
+      "test": "resume/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=file_intake"
+    },
+    {
+      "test": "support/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "support/templates",
+      "ok": true,
+      "status": 200,
+      "detail": "1 templates"
+    },
+    {
+      "test": "support/file-ok",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "support/file-reject",
+      "ok": true,
+      "status": 422,
+      "detail": "rejected bad mime"
+    },
+    {
+      "test": "support/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "support/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=chat"
+    },
+    {
+      "test": "general/detail",
+      "ok": true,
+      "status": 200,
+      "detail": "OK"
+    },
+    {
+      "test": "general/invoke-chat",
+      "ok": true,
+      "status": null,
+      "detail": "skipped (SKIP_INVOKE=1)"
+    },
+    {
+      "test": "general/kind",
+      "ok": true,
+      "status": null,
+      "detail": "kind=chat"
+    },
+    {
+      "test": "platform/notifications",
+      "ok": true,
+      "status": 200,
+      "detail": "ok"
+    },
+    {
+      "test": "platform/notifications-count",
+      "ok": true,
+      "status": 200,
+      "detail": "ok"
+    },
+    {
+      "test": "platform/sidebar",
+      "ok": true,
+      "status": 200,
+      "detail": "ok"
+    }
+  ]
+}

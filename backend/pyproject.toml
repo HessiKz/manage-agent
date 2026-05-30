@@ -1,0 +1,83 @@
+[project]
+name = "manage-agent-backend"
+version = "0.1.0"
+description = "FastAPI + LangChain backend for the Enterprise AI Agent Workspace"
+readme = "../README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Hessi" }]
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.17",
+
+    # Settings & validation
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.7.0",
+    "email-validator>=2.2.0",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14.0",
+    "asyncpg>=0.30.0",
+    "psycopg2-binary>=2.9.10",       # alembic sync url
+
+    # Cache / queue
+    "redis>=5.2.0",
+
+    # Auth
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt==4.0.1",                 # pin to avoid passlib warning
+
+    # LangChain
+    "langchain>=0.3.7",
+    "langchain-core>=0.3.15",
+    "langchain-openai>=0.2.8",
+    "langchain-community>=0.3.5",
+    "langgraph>=0.2.50",
+
+    # Misc
+    "httpx>=0.28.0",
+    "python-slugify>=8.0.4",
+    "tenacity>=9.0.0",
+    "structlog>=24.4.0",
+    "pypdf>=5.0.0",
+    "openpyxl>=3.1.5",
+    "jdatetime>=5.0.0",
+    "fpdf2>=2.8.0",
+    "arabic-reshaper>=3.0.0",
+    "python-bidi>=0.4.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "httpx>=0.28.0",
+    "factory-boy>=3.3.1",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "T20", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

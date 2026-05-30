@@ -1,0 +1,21 @@
+---
+description: Enforce PDF-accurate UI colors + professional motion
+alwaysApply: true
+---
+
+# UI style + motion (always)
+
+- **Colors must match the PDF palette exactly**. Prefer Tailwind tokens from `tailwind.config.ts` (`brand`, `surface`, `sidebar`, `accent`) over ad-hoc `slate-*`, `orange-*`, etc.
+- **Motion kit** lives in `frontend/src/components/motion/`:
+  - `variants.ts` — `slideRight`, `slideLeft`, `slideUp`, `slideDown`, `scaleIn`, `popIn`, `fadeIn` (+ reduced-motion opacity fallbacks)
+  - `stagger.tsx` — `<Stagger>` orchestrator + `<StaggerItem variant="…">` per child
+  - `shared.tsx` — `<SharedLogo layoutId="brand-logo" />` for login ↔ sidebar morph
+  - `transitions.tsx` — `PageTransition` (main content only), `PanelTransition` (tabs/steps)
+- **Route transitions**: wrap dashboard `<main>` content with `PageTransition` in `app-shell.tsx` — never animate the full shell (sidebar flash).
+- **Cross-route morph**: root `app/template.tsx` uses `LayoutGroup` + `AnimatePresence mode="popLayout"`; login hero and sidebar header both use `<SharedLogo>`.
+- **Stagger rule**: any new section with dynamic/conditional rendering must use `Stagger` + `StaggerItem` and pick variants from the library (cards → `scaleIn`, rows → `slideRight`, form fields → `slideUp`, CTAs → `scaleIn`, small text → `fadeIn`).
+- **Tabs / panels**: wrap tab/step bodies with `PanelTransition` keyed by active tab/step; forward = `slideRight`, backward = `slideLeft`.
+- **Duration & easing**: ~140–200ms per item, ease-out (`[0.22, 1, 0.36, 1]`); no springy bounce.
+- **Accessibility**: respect `prefers-reduced-motion` via `useReducedMotion()` — variants degrade to opacity-only.
+- **Performance**: memoize variant objects (`useMemo`); do **not** put `filter: blur()` on layout-sized containers (sidebar edge flash). Blur only on small badges/overlays.
+- **Shell intro**: sidebar/header one-shot reveal via `shellReveal` + `sessionStorage` key `ma_shell_revealed` — not on every in-app navigation.

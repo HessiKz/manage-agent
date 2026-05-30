@@ -1,0 +1,58 @@
+@import url("https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: linear-gradient(160deg, #fbfaf6 0%, #fdf8f0 40%, #fbfaf6 100%);
+  color: #1c1917;
+  font-family: Vazirmatn, system-ui, sans-serif;
+}
+
+@layer components {
+  .glass-panel {
+    @apply rounded-2xl border border-surface-border/90 bg-white/95 shadow-card backdrop-blur-sm;
+  }
+
+  .page-content {
+    @apply mx-auto w-full max-w-[1600px];
+  }
+
+  .focus-ring {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white;
+  }
+
+  .focus-ring-inset {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-brand-400/80 focus-visible:ring-offset-0;
+  }
+
+  .nav-item {
+    @apply flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar;
+  }
+
+  .nav-item-active {
+    @apply bg-gradient-to-l from-brand-500 to-brand-600 font-medium text-white shadow-md shadow-brand-500/25;
+  }
+
+  .nav-item-idle {
+    @apply text-stone-300 hover:bg-white/10 hover:text-white;
+  }
+
+  .chip-btn {
+    @apply cursor-pointer rounded-full px-3 py-1.5 text-xs font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-1;
+  }
+
+  .btn-primary {
+    @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-brand-500 to-brand-600 px-4 py-2.5 text-sm font-medium text-white shadow-md shadow-brand-500/30 transition-colors duration-200 hover:from-brand-600 hover:to-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex cursor-pointer items-center justify-center rounded-xl border border-surface-border bg-white px-4 py-2.5 text-sm font-medium text-stone-700 transition-colors duration-200 hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+}
