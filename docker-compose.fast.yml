@@ -1,0 +1,32 @@
+# Pre-built images (build locally, load on offline VPS):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.fast.yml --profile prod up -d
+
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  backend:
+    image: manage-agent-backend:latest
+    build: !reset null
+    ports: !reset []
+    # !reset nulls volumes entirely on some Compose versions — use !override.
+    volumes: !override
+      - backend_data:/app/var
+
+  frontend:
+    image: manage-agent-frontend:latest
+    build: !reset null
+    volumes: !reset []
+    ports: !reset []
+    environment:
+      NODE_ENV: production
+      INTERNAL_API_URL: http://backend:8000
+    command: ["node", "server.js"]
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"

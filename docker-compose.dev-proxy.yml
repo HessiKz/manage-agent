@@ -1,0 +1,11 @@
+# Nginx reverse proxy for `make dev` — host network, public :80 → localhost :8000/:3000
+# Usage: docker compose -f docker-compose.dev-proxy.yml up -d
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: ma-nginx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./nginx/nginx.dev-host.conf:/etc/nginx/nginx.conf:ro

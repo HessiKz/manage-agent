@@ -12,7 +12,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-manage_agent}"]
       interval: 5s
@@ -27,7 +27,7 @@ services:
     volumes:
       - redisdata:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis}", "ping"]
       interval: 5s
@@ -45,6 +45,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin}@postgres:5432/${POSTGRES_DB:-manage_agent}
       DATABASE_SYNC_URL: postgresql+psycopg2://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin}@postgres:5432/${POSTGRES_DB:-manage_agent}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      PYTHONPATH: /app
+      APP_ENV: development
+      CORS_ORIGINS: http://45.138.135.253,http://45.138.135.253:3000
     volumes:
       - ./backend:/app
     ports:
@@ -54,7 +57,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh scripts/docker-entry.sh --reload
 
   frontend:
     build:
@@ -62,19 +65,22 @@ services:
       dockerfile: Dockerfile
     container_name: ma-frontend
     restart: unless-stopped
+    # ponytail: dev bind-mount needs host uid — nextjs (1001) cannot write hessi-owned .next
+    user: "${UID:-1000}:${GID:-1000}"
     env_file: ./frontend/.env
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NODE_ENV: development
+      # Same-origin /api/v1 via Next rewrites — works on localhost and public IP
+      NEXT_PUBLIC_API_URL: ""
       INTERNAL_API_URL: http://backend:8000
+      NEXT_PUBLIC_LOG_CLIENT_ERRORS: "false"
     volumes:
       - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
     ports:
       - "3000:3000"
     depends_on:
       - backend
-    command: npm run dev
+    command: sh scripts/docker-dev-entry.sh
 
   nginx:
     image: nginx:alpine
@@ -87,8 +93,6 @@ services:
     depends_on:
       - backend
       - frontend
-    profiles:
-      - prod
 
 volumes:
   pgdata:

@@ -5,11 +5,11 @@
 
 services:
   postgres:
-    ports: []
+    ports: !reset []
     restart: unless-stopped
 
   redis:
-    ports: []
+    ports: !reset []
     restart: unless-stopped
 
   backend:
@@ -21,34 +21,48 @@ services:
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
+      PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DATABASE_SYNC_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CORS_ORIGINS: ${PUBLIC_URL}
       LOG_JSON: "true"
-    volumes:
+    # Drop dev bind-mount; only persist runtime data
+    volumes: !reset
       - backend_data:/app/var
-    ports: []
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips="*"
+    ports: !reset []
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips="*"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
-      interval: 30s
+      test: ["CMD", "curl", "-fsS", "--max-time", "3", "http://127.0.0.1:8000/health"]
+      interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 25s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${PUBLIC_URL}
+        # Empty → browser uses same-origin /api/v1 (nginx → backend). Never bake 127.0.0.1.
+        NEXT_PUBLIC_API_URL: ""
         NEXT_PUBLIC_LOG_CLIENT_ERRORS: "true"
     restart: unless-stopped
+    # Drop dev bind-mount, host user, and npm run dev
+    user: !reset
+    env_file: !reset []
+    volumes: !reset []
+    command: !reset
     environment:
       NODE_ENV: production
       INTERNAL_API_URL: http://backend:8000
-    ports: []
+      NEXT_PUBLIC_API_URL: ""
+    ports: !reset []
     depends_on:
       backend:
         condition: service_healthy
