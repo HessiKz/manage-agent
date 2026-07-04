@@ -2,7 +2,7 @@
 name = "manage-agent-backend"
 version = "0.1.0"
 description = "FastAPI + LangChain backend for the Enterprise AI Agent Workspace"
-readme = "../README.md"
+readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Hessi" }]
 dependencies = [
@@ -44,6 +44,8 @@ dependencies = [
     "structlog>=24.4.0",
     "pypdf>=5.0.0",
     "openpyxl>=3.1.5",
+    "xlrd>=2.0.1",
+    "python-docx>=1.1.0",
     "jdatetime>=5.0.0",
     "fpdf2>=2.8.0",
     "arabic-reshaper>=3.0.0",

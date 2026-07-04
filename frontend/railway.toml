@@ -1,0 +1,13 @@
+# Optional: host the Next.js app on Railway (Vercel is also supported).
+# Set Root Directory to `frontend`. Build args must be set in Railway Variables
+# or as Docker build-time env (see docs/RAILWAY.md).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
