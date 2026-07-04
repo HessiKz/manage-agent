@@ -1,32 +1,41 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Paperclip, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ChatMessageContent } from "@/components/agents/chat-message-content";
-import { invokeAgent, invokeAgentStream } from "@/lib/api";
+import { ChatTurn } from "@/components/chat/chat-turn";
+import { LoadingSpinner } from "@/components/loading/loading-indicator";
+import type { MessageThinking } from "@/lib/chat-message-types";
+import {
+  deleteAgentFile,
+  fetchAgentFiles,
+  invokeAgent,
+  invokeAgentStream,
+  uploadAgentFile,
+} from "@/lib/api";
+import { handleApiError } from "@/lib/api-error-handler";
 import { getErrorMessage } from "@/lib/errors";
+import {
+  filePolicyAcceptAttr,
+  validateFileAgainstPolicy,
+} from "@/lib/file-policy-utils";
 import { formatAssistantOutput } from "@/lib/sanitize-chat-message";
+import { useLlmStreamLoading, withGeneratingPhase } from "@/hooks/use-llm-stream-loading";
 import { cn } from "@/lib/utils";
-import type { Agent } from "@/types";
+import type { Agent, AgentFilePolicy } from "@/types";
 
-export type ChatMessage = { role: "user" | "assistant"; content: string };
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  thinking?: MessageThinking | string;
+  isStreaming?: boolean;
+};
 
 export type ChatExchange = {
   user: string;
   assistant: string;
 };
-
-function TypingIndicator() {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="sr-only">در حال تایپ…</span>
-      <span className="h-2 w-2 animate-bounce rounded-full bg-white/90 [animation-delay:-0.2s]" />
-      <span className="h-2 w-2 animate-bounce rounded-full bg-white/90 [animation-delay:-0.1s]" />
-      <span className="h-2 w-2 animate-bounce rounded-full bg-white/90" />
-    </div>
-  );
-}
 
 type Props = {
   agent: Agent;
@@ -41,6 +50,16 @@ type Props = {
   /** Legacy: append via parent instead of using exchange effect. */
   exchange?: ChatExchange | null;
   onExchangeConsumed?: () => void;
+  /** Prefix for data-ma-support selectors (support agent automation). */
+  automationPrefix?: string;
+  /** Fill the compose box when a parent suggests a prompt (e.g. training chips). */
+  prefillInput?: string | null;
+  /** Optional file upload in compose row (e.g. training preview). */
+  fileAttachment?: {
+    agentId: string;
+    policy: AgentFilePolicy;
+    supportId?: string;
+  };
 };
 
 export function ChatPanel({
@@ -52,6 +71,9 @@ export function ChatPanel({
   onMessagesChange,
   exchange,
   onExchangeConsumed,
+  automationPrefix,
+  prefillInput,
+  fileAttachment,
 }: Props) {
   const [internalMessages, setInternalMessages] = useState<ChatMessage[]>([]);
   const isControlled = controlledMessages !== undefined;
@@ -71,9 +93,22 @@ export function ChatPanel({
   const [input, setInput] = useState(initialMessage ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const llmLoading = useLlmStreamLoading();
+  const [thinkingOpen, setThinkingOpen] = useState(true);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const threadId = useRef<string | undefined>(threadIdProp ?? undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const consumedExchangeRef = useRef<ChatExchange | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const qc = useQueryClient();
+
+  const { data: attachedFiles = [] } = useQuery({
+    queryKey: ["agent-files", fileAttachment?.agentId],
+    queryFn: () => fetchAgentFiles(fileAttachment!.agentId),
+    enabled: Boolean(fileAttachment?.agentId),
+  });
 
   useEffect(() => {
     if (threadIdProp) threadId.current = threadIdProp;
@@ -82,6 +117,10 @@ export function ChatPanel({
   useEffect(() => {
     if (initialMessage) setInput(initialMessage);
   }, [initialMessage]);
+
+  useEffect(() => {
+    if (prefillInput) setInput(prefillInput);
+  }, [prefillInput]);
 
   useEffect(() => {
     if (!exchange || isControlled) return;
@@ -102,7 +141,47 @@ export function ChatPanel({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading]);
+  }, [messages, loading, llmLoading.statusMessage, llmLoading.thinkingContent]);
+
+  async function handleFilePick(fileList: FileList | null) {
+    if (!fileAttachment || !fileList?.length) return;
+    setFileError(null);
+    setUploadingFile(true);
+    try {
+      for (const file of Array.from(fileList)) {
+        const policyErr = validateFileAgainstPolicy(file, fileAttachment.policy);
+        if (policyErr) {
+          setFileError(policyErr);
+          continue;
+        }
+        if (attachedFiles.length >= fileAttachment.policy.max_files) {
+          setFileError(`حداکثر ${fileAttachment.policy.max_files} فایل مجاز است`);
+          break;
+        }
+        await uploadAgentFile(fileAttachment.agentId, file);
+      }
+      await qc.invalidateQueries({ queryKey: ["agent-files", fileAttachment.agentId] });
+    } catch (e: unknown) {
+      setFileError(getErrorMessage(e));
+    } finally {
+      setUploadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleDeleteAttachedFile(fileId: string) {
+    if (!fileAttachment) return;
+    setFileError(null);
+    setDeletingFileId(fileId);
+    try {
+      await deleteAgentFile(fileAttachment.agentId, fileId);
+      await qc.invalidateQueries({ queryKey: ["agent-files", fileAttachment.agentId] });
+    } catch (e: unknown) {
+      setFileError(getErrorMessage(e));
+    } finally {
+      setDeletingFileId(null);
+    }
+  }
 
   async function send(overrideText?: string) {
     if (!composable) return;
@@ -112,22 +191,63 @@ export function ChatPanel({
     setError(null);
     setMessages((m) => [...m, { role: "user", content: text }]);
     setLoading(true);
+    setThinkingOpen(true);
+    llmLoading.begin("در حال ارسال درخواست…");
 
     try {
       let assistant = "";
-      setMessages((m) => [...m, { role: "assistant", content: "" }]);
+      setMessages((m) => [...m, { role: "assistant", content: "", isStreaming: true }]);
 
-      await invokeAgentStream(agent.id, text, (token) => {
-        assistant += token;
-        setMessages((m) => {
-          const copy = [...m];
+      const streamResult = await invokeAgentStream(
+        agent.id,
+        text,
+        withGeneratingPhase((token) => {
+          assistant += token;
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: formatAssistantOutput(assistant),
+              isStreaming: true,
+            };
+            return copy;
+          });
+        }, llmLoading),
+        threadId.current,
+        (finalOut) => {
+          assistant = finalOut;
+          const thinking = llmLoading.snapshotThinking();
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: formatAssistantOutput(finalOut),
+              isStreaming: false,
+              thinking: thinking ?? undefined,
+            };
+            return copy;
+          });
+        },
+        llmLoading.callbacks
+      );
+      if (streamResult.output) {
+        assistant = streamResult.output;
+      }
+
+      setMessages((m) => {
+        const copy = [...m];
+        const last = copy[copy.length - 1];
+        const thinking = llmLoading.snapshotThinking();
+        if (last?.role === "assistant") {
           copy[copy.length - 1] = {
-            role: "assistant",
-            content: formatAssistantOutput(assistant),
+            ...last,
+            content: formatAssistantOutput(assistant || last.content),
+            isStreaming: false,
+            thinking: thinking ?? last.thinking,
           };
-          return copy;
-        });
-      }, threadId.current);
+        }
+        return copy;
+      });
 
       if (!assistant) {
         const res = await invokeAgent(agent.id, text, threadId.current);
@@ -136,15 +256,22 @@ export function ChatPanel({
           copy[copy.length - 1] = {
             role: "assistant",
             content: formatAssistantOutput(res.output),
+            isStreaming: false,
           };
           return copy;
         });
       }
     } catch (e: unknown) {
-      setError(getErrorMessage(e));
+      const apiErr = handleApiError(e, {
+        event: "chat.invoke",
+        toast: true,
+        toastTitle: "خطا در گفت‌وگو",
+      });
+      setError(apiErr.message);
       setMessages((m) => m.filter((_, i) => i !== m.length - 1 || m[m.length - 1].content));
     } finally {
       setLoading(false);
+      llmLoading.complete();
     }
   }
 
@@ -185,27 +312,91 @@ export function ChatPanel({
               key={`msg-${i}-${msg.role}-${msg.content.slice(0, 24)}`}
               className={`flex ${msg.role === "user" ? "justify-start" : "justify-end"}`}
             >
-              <div
-                className={`max-w-[92%] rounded-2xl px-3 py-2 ${
-                  msg.role === "user" ? "bg-brand-100" : "bg-brand-600"
-                }`}
-              >
-                {msg.content.trim() ? (
-                  <ChatMessageContent content={msg.content} variant={msg.role} />
-                ) : isPendingAssistant ? (
-                  <TypingIndicator />
-                ) : null}
-              </div>
+              <ChatTurn
+                role={msg.role}
+                content={msg.content}
+                thinking={msg.thinking}
+                isStreaming={msg.isStreaming}
+                isPending={isPendingAssistant}
+                loading={loading}
+                phase={llmLoading.phase}
+                statusMessage={llmLoading.statusMessage}
+                liveThinkingContent={llmLoading.thinkingContent}
+                thinkingActive={llmLoading.thinkingActive}
+                thinkingSummary={llmLoading.thinkingSummary}
+                thinkingOpen={thinkingOpen}
+                onThinkingOpenChange={setThinkingOpen}
+                automationPrefix={automationPrefix}
+                animateEnter={msg.role === "assistant"}
+              />
             </div>
           );
         })}
         {error && <p className="text-sm text-accent-red">{error}</p>}
       </div>
 
-      <div className="shrink-0 border-t border-surface-border p-3">
-        {composable ? (
+      {composable && (
+        <div className="shrink-0 border-t border-surface-border p-3">
+          {fileAttachment && attachedFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {attachedFiles.slice(0, 8).map((f) => (
+                <span
+                  key={f.id}
+                  className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 text-[11px] text-stone-700"
+                  title={f.filename}
+                >
+                  <Paperclip className="h-3 w-3 shrink-0 text-brand-600" />
+                  <span className="truncate">{f.filename}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded p-0.5 text-stone-400 hover:text-accent-red disabled:opacity-50"
+                    onClick={() => void handleDeleteAttachedFile(f.id)}
+                    disabled={deletingFileId === f.id || uploadingFile}
+                    aria-label={`حذف ${f.filename}`}
+                  >
+                    {deletingFileId === f.id ? (
+                      <LoadingSpinner tone="neutral" />
+                    ) : (
+                      <X className="h-3 w-3" />
+                    )}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {fileError && (
+            <p className="mb-2 text-xs text-accent-red">{fileError}</p>
+          )}
           <div className="flex gap-2">
+            {fileAttachment && (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="shrink-0 px-2.5"
+                  data-ma-support={fileAttachment.supportId}
+                  disabled={loading || uploadingFile || attachedFiles.length >= fileAttachment.policy.max_files}
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="پیوست فایل"
+                >
+                  {uploadingFile ? (
+                    <LoadingSpinner tone="neutral" />
+                  ) : (
+                    <Paperclip className="h-4 w-4" />
+                  )}
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept={filePolicyAcceptAttr(fileAttachment.policy)}
+                  onChange={(e) => void handleFilePick(e.target.files)}
+                />
+              </>
+            )}
             <input
+              data-ma-support={automationPrefix ? `${automationPrefix}-input` : undefined}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
@@ -215,19 +406,16 @@ export function ChatPanel({
             />
             <Button
               type="button"
-              className="shrink-0"
+              className="shrink-0 transition-transform active:scale-[0.98]"
+              data-ma-support={automationPrefix ? `${automationPrefix}-send` : undefined}
               onClick={() => send()}
               disabled={loading || !input.trim()}
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              {loading ? <LoadingSpinner tone="inverse" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
-        ) : (
-          <p className="text-center text-xs text-stone-500">
-            گفت‌وگوی آزاد برای این ایجنت غیرفعال است — فقط نتایج اجرا نمایش داده می‌شود.
-          </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

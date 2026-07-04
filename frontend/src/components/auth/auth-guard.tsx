@@ -2,21 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
-import { fetchMe } from "@/lib/api";
+
+import { fetchMe, logout } from "@/lib/api";
+import { getValidAccessToken } from "@/lib/auth-token";
 import { useAuthStore } from "@/stores/auth-store";
 import { useMounted } from "@/hooks/use-mounted";
+import { LoadingIndicator } from "@/components/loading";
 
 function AuthLoading({ slowLoad }: { slowLoad?: boolean }) {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-surface-muted/30">
-      <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
-      <p className="text-sm text-stone-500">در حال بارگذاری فضای کار…</p>
-      {slowLoad && (
-        <p className="max-w-sm px-6 text-center text-xs leading-relaxed text-stone-400">
-          سرور ممکن است مشغول تست ایجنت باشد — چند ثانیه دیگر صبر کنید.
-        </p>
-      )}
+    <div className="flex min-h-screen items-center justify-center bg-surface-muted/30 px-6">
+      <LoadingIndicator
+        size="panel"
+        stage="در حال بارگذاری فضای کار…"
+        detail={
+          slowLoad
+            ? "سرور ممکن است مشغول تست ایجنت باشد — چند ثانیه دیگر صبر کنید."
+            : undefined
+        }
+      />
     </div>
   );
 }
@@ -32,38 +36,39 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!mounted) return;
 
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
-    if (user) {
-      setAuthed(true);
-      return;
-    }
-
     let cancelled = false;
     const slowTimer = window.setTimeout(() => {
       if (!cancelled) setSlowLoad(true);
     }, 4000);
 
-    fetchMe()
-      .then((u) => {
-        if (cancelled) return;
-        setUser(u);
-        setAuthed(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-        useAuthStore.getState().clear();
+    void getValidAccessToken().then((token) => {
+      if (cancelled) return;
+      if (!token) {
+        logout();
         router.replace("/login");
-      })
-      .finally(() => {
-        window.clearTimeout(slowTimer);
-      });
+        return;
+      }
+
+      if (user) {
+        setAuthed(true);
+        return;
+      }
+
+      fetchMe()
+        .then((u) => {
+          if (cancelled) return;
+          setUser(u);
+          setAuthed(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          logout();
+          router.replace("/login");
+        })
+        .finally(() => {
+          window.clearTimeout(slowTimer);
+        });
+    });
 
     return () => {
       cancelled = true;
