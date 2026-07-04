@@ -37,6 +37,8 @@ class AuthService:
             locale=payload.locale,
             department=payload.department,
             title=payload.title,
+            phone=payload.phone,
+            address=payload.address,
             is_superuser=payload.is_superuser,
         )
         user = await self.users.create(user)

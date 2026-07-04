@@ -32,6 +32,8 @@ class User(Base, UUIDPkMixin, TimestampMixin):
 
     department: Mapped[str | None] = mapped_column(String(100), nullable=True)
     title: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # Relationships
     roles: Mapped[list["Role"]] = relationship(

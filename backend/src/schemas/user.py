@@ -13,17 +13,33 @@ class RoleRead(BaseModel):
     description: str | None = None
 
 
+class RoleCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    description: str | None = Field(None, max_length=512)
+
+
 class UserBase(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255)
     locale: str = "fa"
     department: str | None = None
     title: str | None = None
+    phone: str | None = Field(None, max_length=32)
+    address: str | None = Field(None, max_length=512)
 
 
 class UserCreate(UserBase):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     is_superuser: bool = False
+
+
+class UserAdminCreate(UserBase):
+    """Superuser-only user provisioning (support agent + admin panel)."""
+
+    email: EmailStr
+    password: str | None = Field(None, min_length=8, max_length=128)
+    is_superuser: bool = False
+    role_name: str | None = Field(None, max_length=100)
 
 
 class UserUpdate(BaseModel):
