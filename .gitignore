@@ -49,12 +49,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ─── Env / Secrets ───────────────────────────────────────
+# ─── Env / Secrets (never commit — including examples) ─
 .env
-.env.local
-.env.*.local
-.env.development
-.env.production
+.env.*
+.deploy.env
+.deploy.env.*
 *.pem
 *.key
 
@@ -80,7 +79,6 @@ logs/
 .cache/
 coverage/
 *.local
-.deploy.env
 frontend/.debug-session.ndjson
 frontend/scanner_linux
 graphify-out/
