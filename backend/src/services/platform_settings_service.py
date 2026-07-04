@@ -76,15 +76,16 @@ class PlatformSettingsService:
         cursor_cfg = state.get("cursor") or {}
         cursor_base = cursor_cfg.get("base_url") or settings.cursor_api_base_url
 
+        default_model = settings.openai_default_model
         gateway = {
             "configured": bool(settings.openai_api_key),
             "base_url": settings.openai_base_url or "https://api.openai.com/v1",
-            "model": settings.openai_default_model,
+            "model": default_model,
         }
 
         cursor_status: dict[str, Any] = {
             "base_url": cursor_base,
-            "model": cursor_cfg.get("model") or settings.cursor_api_model,
+            "model": default_model,
             "reachable": False,
             "detail": None,
         }

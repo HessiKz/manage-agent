@@ -129,6 +129,28 @@ def test_sidebar_counts(client: TestClient, auth_headers: dict):
     assert "worker_agents" in data
 
 
+def test_department_counts_match_active_agents(client: TestClient, auth_headers: dict):
+    """Sidebar department badges must reflect every active agent, not catalog-only."""
+    from collections import Counter
+
+    dept_resp = client.get("/api/v1/dashboards/departments", headers=auth_headers)
+    assert dept_resp.status_code == 200
+    listed = dept_resp.json()
+
+    agents_resp = client.get(
+        "/api/v1/agents",
+        headers=auth_headers,
+        params={"status": "active", "page_size": 100},
+    )
+    assert agents_resp.status_code == 200
+    agents = agents_resp.json()["items"]
+
+    expected = Counter(a["department"] for a in agents if a.get("department"))
+    actual = {row["department"]: row["count"] for row in listed}
+
+    assert actual == dict(expected)
+
+
 def test_prompt_templates_and_improve(client: TestClient, auth_headers: dict):
     import os
 

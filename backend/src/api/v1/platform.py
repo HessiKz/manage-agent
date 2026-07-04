@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from src.api.dependencies import DB, CurrentSuperuser, CurrentUser
 from src.schemas.platform import (
+    AvailableModelsRead,
     LlmProviderHealth,
     LlmProviderRead,
     LlmProviderUpdate,
@@ -13,6 +14,18 @@ from src.schemas.platform import (
 from src.services.platform_settings_service import PlatformSettingsService
 
 router = APIRouter()
+
+
+@router.get("/models", response_model=AvailableModelsRead)
+async def list_available_models(_user: CurrentUser):
+    from src.config import settings
+    from src.core import llm_runtime
+
+    models = llm_runtime.available_models()
+    return AvailableModelsRead(
+        models=models,
+        default=settings.openai_default_model or models[0],
+    )
 
 
 @router.get("/llm-provider", response_model=LlmProviderRead)

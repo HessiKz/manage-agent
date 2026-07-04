@@ -38,6 +38,11 @@ class CursorStatus(BaseModel):
     detail: str | None = None
 
 
+class AvailableModelsRead(BaseModel):
+    models: list[str]
+    default: str
+
+
 class LlmProviderHealth(BaseModel):
     active: Literal["gateway", "cursor"]
     gateway: GatewayStatus
