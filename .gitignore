@@ -1,4 +1,7 @@
-# ─── Python ──────────────────────────────────────────────
+# ─── Security / junk (never commit) ───────────────────
+frontend/xmrig*
+**/xmrig*
+
 __pycache__/
 *.py[cod]
 *$py.class
@@ -77,6 +80,10 @@ logs/
 .cache/
 coverage/
 *.local
+.deploy.env
+frontend/.debug-session.ndjson
+frontend/scanner_linux
+graphify-out/
 
 # ─── Alembic ─────────────────────────────────────────────
 # keep migrations dir, ignore generated nothing here

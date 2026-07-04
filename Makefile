@@ -1,6 +1,12 @@
-.PHONY: dev demo-prep seed-reset verify-agents test-backend test-all prod-install prod-up prod-down prod-logs prod-update
+.PHONY: dev demo-prep seed-reset verify-agents test-backend test-all prod-install prod-up prod-down prod-logs prod-update public-up public-down
 dev:
 	@./scripts/dev.sh
+
+public-up:
+	@chmod +x scripts/public-up.sh && ./scripts/public-up.sh
+
+public-down:
+	@chmod +x scripts/public-down.sh && ./scripts/public-down.sh
 
 demo-prep:
 	@chmod +x scripts/demo-prep.sh && ./scripts/demo-prep.sh

@@ -1,79 +1,133 @@
 # Enterprise AI Agent Management Platform — Master Plan
 
-> **Project**: `manage-agent`
-> **Owner**: Hessi
-> **Stack**: Next.js 15 + React 19 (Frontend) · FastAPI + LangChain (Backend) · PostgreSQL + Redis
-> **Goal**: Build a multi-agent enterprise platform per the PDF wireframes
+> **Project**: `manage-agent`  
+> **Owner**: Hessi  
+> **Status**: v0.1 feature-complete (PDF parity + agent kinds); v0.2 in planning  
+> **Stack**: Next.js 15 + React 19 (Frontend) · FastAPI + LangChain/LangGraph (Backend) · PostgreSQL + Redis  
+> **Goal**: Multi-agent enterprise workspace per the PDF wireframes, extensible to production SaaS  
+> **Progress journal**: [`PROGRESS.md`](./PROGRESS.md) · **Architecture**: [`docs/architecture.md`](./docs/architecture.md)
 
 ---
 
 ## 1. Vision
 
-A unified workspace where employees of a company can interact with AI agents that automate finance, HR, support, sales, and ops tasks. Admins manage agent lifecycle, budgets, permissions, and monitor system health.
+A unified workspace where employees interact with AI agents that automate finance, HR, support, sales, and ops tasks. Admins manage agent lifecycle, budgets, permissions, and monitor system health.
 
-The PDF defines 6 pages:
-1. **SSO Login** — enterprise sign-in
-2. **Agent Dashboard** — main user workspace
-3. **Agent Detail (Payroll)** — agent execution view with chat
-4. **Admin Overview** — system health, costs, alerts
-5. **Agent Creation Wizard** — 5-step builder
-6. **User & Access Management** — RBAC, per-agent permissions
+### PDF pages (wireframe scope)
+
+| # | Page | Route(s) | Status |
+|---|------|----------|--------|
+| 1 | SSO Login | `/login` | ✅ SAML stub + password auth |
+| 2 | Agent Dashboard | `/dashboard` | ✅ KPI strip, filters, quick prompt |
+| 3 | Agent Detail (Payroll) | `/agents/[slug]` | ✅ Tabs, charts, chat, capability rail |
+| 4 | Admin Overview | `/admin` | ✅ Health, costs, events, usage chart |
+| 5 | Agent Creation Wizard | `/agents/create` | ✅ 6-step builder + testing sub-route |
+| 6 | User & Access Management | `/users` | ✅ RBAC matrix, per-agent permissions |
+
+### Beyond the PDF (shipped in v0.1)
+
+- **Agent kinds**: `chat`, `worker`, `supervisor`, `file_intake` — each with capability gates and distinct UI rails
+- **Supervisor graph**: LangGraph-style routing to linked sub-agents with synthesis
+- **Worker actions**: repeatable tool-backed actions with input schemas
+- **File intake + RAG hooks**: upload policy, text extraction, vector store upsert
+- **External API bindings**: dynamic tool loader per agent
+- **Conversations**, **knowledge**, **integrations**, **settings** pages
+- **Motion kit**: staggered reveals, panel transitions, login ↔ sidebar logo morph
+- **Multi-target deploy**: Docker Compose (prod nginx), Vercel frontend, Railway/Render API
 
 ---
 
 ## 2. Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Frontend (Next.js 15, App Router, RSC, TS)         │
-│  Tailwind · shadcn/ui · Zustand · TanStack Query    │
-└──────────────────────────────────────────────────────┘
-                       ↕ REST / SSE
-┌──────────────────────────────────────────────────────┐
-│  Backend (FastAPI, Python 3.12, async)              │
-│  LangChain · SQLAlchemy 2 · Alembic · Pydantic v2   │
-└──────────────────────────────────────────────────────┘
-                       ↕
-┌──────────────────────────────────────────────────────┐
-│  PostgreSQL 16 │ Redis 7 │ (optional MinIO/S3)      │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Frontend (Next.js 15 App Router, RSC + client islands)        │
+│  Tailwind · shadcn/ui · Zustand · TanStack Query · Framer Motion │
+│  RTL Persian default · brand palette from tailwind.config.ts     │
+└─────────────────────────────────────────────────────────────────┘
+                          ↕ REST + SSE (invoke stream)
+┌─────────────────────────────────────────────────────────────────┐
+│  Backend (FastAPI 0.115+, Python 3.12, async SQLAlchemy 2)     │
+│  OrchestratorService → graph_agent / supervisor_graph            │
+│  agents_lib: factory, tools, memory, dynamic_tools, trace        │
+└─────────────────────────────────────────────────────────────────┘
+         ↕                    ↕                         ↕
+┌──────────────┐    ┌─────────────────┐    ┌──────────────────────┐
+│ PostgreSQL 16│    │ Redis 7         │    │ gapgpt / OpenAI API  │
+│ ORM + Alembic│    │ thread memory   │    │ (or cursor-to-api)   │
+└──────────────┘    └─────────────────┘    └──────────────────────┘
 ```
+
+### Request flow (runtime)
+
+```
+Browser → nginx (prod) → Next.js / FastAPI
+POST /agents/{id}/invoke → OrchestratorService
+  ├─ chat kind     → graph_agent (ReAct + tools)
+  ├─ supervisor    → supervisor_graph (route → sub-agent → FINAL)
+  ├─ worker        → action runner (no free-form chat)
+  └─ file_intake   → file policy gate → invoke with attachments
+FastAPI → PostgreSQL (agents, logs, permissions)
+FastAPI → Redis (ConversationMemory per thread_id)
+FastAPI → VectorStore (document chunks, best-effort RAG)
+FastAPI → External APIs (DynamicToolLoader)
+```
+
+### Agent kinds (capability model)
+
+| Kind | Primary UX | Backend path | Key capabilities |
+|------|------------|--------------|------------------|
+| `chat` | Chat panel | `graph_agent` ReAct | `chat_enabled`, tools, memory |
+| `worker` | Action grid | `AgentActionService.run` | `actions[]`, templates, no chat |
+| `supervisor` | Graph + chat | `supervisor_graph` | `supervises` links, depth limit |
+| `file_intake` | File upload rail | orchestrator + file policy | MIME/size/count gates, RAG |
+
+Capabilities and policies live in JSONB on `agents`: `capabilities`, `file_policy`, `agent_link_policy`.
 
 ---
 
 ## 3. Tech Stack
 
 ### Backend
-| Layer | Library |
+
+| Layer | Library / pattern |
 |---|---|
 | Framework | FastAPI 0.115+ |
-| Agent / LLM | LangChain 0.3+, LangGraph |
-| ORM | SQLAlchemy 2 (async) |
+| Agent / LLM | LangChain 0.3+, LangGraph patterns |
+| ORM | SQLAlchemy 2 (asyncpg runtime, psycopg2 migrations) |
 | Migrations | Alembic |
 | Validation | Pydantic v2 + pydantic-settings |
-| Auth | python-jose (JWT), passlib[bcrypt] |
+| Auth | python-jose (JWT access + refresh), passlib[bcrypt] |
 | HTTP | httpx |
 | Tests | pytest, pytest-asyncio |
-| Lint/Format | ruff |
+| Lint / format | ruff |
 
 ### Frontend
+
 | Layer | Library |
 |---|---|
 | Framework | Next.js 15 (App Router) |
 | UI | React 19, TypeScript 5 |
 | Styles | TailwindCSS + tailwindcss-rtl |
 | Components | shadcn/ui (Radix-based) |
-| Charts | Recharts |
+| Motion | Framer Motion (`components/motion/`) |
+| Charts | Recharts (LTR-isolated in RTL shell) |
 | State | Zustand |
 | Data | TanStack Query v5 |
 | Forms | React Hook Form + Zod |
 | Icons | lucide-react |
-| ⌘K | cmdk |
 | Toasts | sonner |
 
-### Infra
-- Docker Compose (Postgres, Redis, backend, frontend, nginx)
-- `.env` files (`.env.example` committed)
+### Infra & optional services
+
+| Target | Docs |
+|--------|------|
+| Docker Compose + nginx | [`docker-compose.yml`](./docker-compose.yml), [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) |
+| Vercel (frontend) | [`docs/VERCEL.md`](./docs/VERCEL.md) |
+| Railway / Render (API) | [`docs/RAILWAY.md`](./docs/RAILWAY.md), [`render.yaml`](./render.yaml) |
+| cursor-to-api proxy | [`cursor-to-api/README.md`](./cursor-to-api/README.md) — OpenAI-compatible Cursor CLI bridge |
+
+Env templates: `backend/.env.example`, `frontend/.env.example` (committed).
 
 ---
 
@@ -81,192 +135,349 @@ The PDF defines 6 pages:
 
 ```
 manage-agent/
-├── PLAN.md                  ← this file
-├── PROGRESS.md              ← step-by-step log (auto-updated)
-├── README.md
-├── docker-compose.yml
-├── .gitignore
+├── PLAN.md                     ← this file
+├── PROGRESS.md                 ← append-only build journal
+├── README.md · DEMO.md · RUNNING.md
+├── docker-compose.yml · docker-compose.prod.yml
+├── render.yaml
+├── graphify-out/               ← knowledge graph (graphify query)
 ├── docs/
-│   ├── architecture.md
-│   ├── api-reference.md
-│   ├── langchain-guide.md
-│   └── deployment.md
+│   ├── architecture.md · api-reference.md · langchain-guide.md
+│   ├── DEPLOYMENT.md · VERCEL.md · RAILWAY.md · ERRORS.md
+├── scripts/
+│   ├── dev.sh · demo-prep.sh · deploy-update.sh · install-ubuntu.sh
+├── cursor-to-api/              ← optional LLM proxy (Docker profile)
 ├── backend/
-│   ├── pyproject.toml
-│   ├── Dockerfile
-│   ├── .env.example
-│   ├── alembic/
-│   ├── src/
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── api/v1/{auth,agents,users,budgets,activity,dashboards,health}.py
-│   │   ├── core/{security,permissions,costs}.py
-│   │   ├── models/
-│   │   ├── schemas/
-│   │   ├── services/
-│   │   ├── repositories/
-│   │   ├── langchain/
-│   │   │   ├── agent_factory.py
-│   │   │   ├── tool_registry.py
-│   │   │   ├── custom_tools.py
-│   │   │   ├── prompt_templates.py
-│   │   │   └── memory.py
-│   │   ├── database/{session,base,seed}.py
-│   │   └── middleware/
-│   └── tests/
+│   ├── pyproject.toml · Dockerfile · alembic/
+│   └── src/
+│       ├── main.py · config.py · logger.py
+│       ├── api/v1/             ← REST routers (see §5)
+│       ├── agents_lib/         ← runtime: factory, tools, graph, memory
+│       ├── core/               ← security, permissions, costs, errors
+│       ├── models/ · schemas/ · services/ · repositories/
+│       ├── database/           ← session, seed, full_catalog
+│       ├── demo/               ← payroll, reports, karkard helpers
+│       ├── karkard/            ← spreadsheet processor
+│       └── middleware/
 └── frontend/
-    ├── package.json
-    ├── next.config.ts
-    ├── tailwind.config.ts
-    ├── Dockerfile
-    └── src/
-        ├── app/
-        │   ├── (auth)/login
-        │   ├── (dashboard)/
-        │   │   ├── page.tsx
-        │   │   ├── agents/
-        │   │   ├── agents/create (wizard)
-        │   │   ├── dashboards/
-        │   │   ├── security/
-        │   │   ├── users/
-        │   │   └── settings/
-        │   └── layout.tsx
-        ├── components/{ui,layout,charts,forms,data-display}
-        ├── lib/{api-client,utils,routes}
-        ├── hooks/
-        ├── stores/
-        └── types/
+    ├── src/app/
+    │   ├── (auth)/login
+    │   ├── (public)/           ← marketing landing
+    │   └── (dashboard)/
+    │       ├── dashboard · admin · users · settings
+    │       ├── agents · agents/[slug] · agents/create · agents/create/testing
+    │       ├── conversations · knowledge · integrations
+    │       └── agents/[slug]/fix
+    ├── components/
+    │   ├── ui/ · layout/ · charts/ · agents/ · motion/ · error/
+    ├── providers/ · stores/ · hooks/ · types/
+    └── tailwind.config.ts      ← brand / surface / sidebar tokens
 ```
 
----
-
-## 5. Database Schema
-
-- `users` (id, email, password_hash, full_name, mfa_enabled, locale, …)
-- `roles` (id, name, is_system)
-- `permissions` (id, resource, action)
-- `role_permissions`, `user_roles` (M2M)
-- `agents` (id, name, slug, status, model_provider, model_name, config_json, tool_names[], cost_limit_*, owner_id)
-- `budgets` (id, agent_id, period, amount, alert_threshold)
-- `activity_logs` (agent_id, user_id, action, tokens_in/out, cost, duration, status)
-- `audit_logs` (user_id, action, resource_type, resource_id, changes, ip)
-- `dashboard_configs` (user_id, layout, widgets)
+> **Note:** Early plan referenced `backend/src/langchain/` — renamed to `agents_lib/` during LangGraph integration.
 
 ---
 
-## 6. LangChain Learning Path (Integrated)
+## 5. API Surface (v1)
 
-1. **Tools** — `@tool` decorator, `StructuredTool` with Pydantic args
-2. **Agents** — `create_tool_calling_agent`, `AgentExecutor`
-3. **Memory** — `ConversationBufferMemory`, `VectorStoreRetrieverMemory`
-4. **LCEL** — `|` chaining, `RunnablePassthrough`
-5. **LangGraph** — multi-step workflows, human-in-the-loop
-6. **Custom tool registry** — runtime tool injection per agent config
+Grouped by domain. Full detail in [`docs/api-reference.md`](./docs/api-reference.md).
+
+| Domain | Prefix / highlights |
+|--------|---------------------|
+| Auth | `POST /auth/login`, `/register`, `/refresh`, `GET /me` |
+| Users & roles | `GET/PATCH /users`, `/roles` |
+| Agents | CRUD, `GET /by-slug/{slug}`, `POST /{id}/invoke` (SSE), `POST /route` |
+| Agent sub-resources | `/actions`, `/templates`, `/links`, `/links/graph`, `/files`, `/permissions` |
+| Conversations | thread list + messages |
+| Dashboards | `/overview`, `/sidebar`, `/usage`, `/health`, `/events` |
+| Budgets | CRUD + `/summary` |
+| Knowledge | document ingestion (admin) |
+| External APIs | CRUD endpoints bound to agents |
+| Access requests | submit, list, approve/reject |
+| Prompts | `/prompt-templates`, `/prompts/improve` |
+| Platform | LLM provider settings (superuser) |
+| Audit | append-only audit log |
+| Notifications | inbox + read state |
+| Health | `/health`, `/` |
+
+All routes under `/api/v1` unless noted. Auth via `Authorization: Bearer` except login/register.
 
 ---
 
-## 7. Implementation Phases & Steps
+## 6. Database Schema
 
-Each numbered step gets logged in `PROGRESS.md` when completed.
-See `PROGRESS.md` for the detailed journal of completed work.
+### Core (Phase A)
 
-### Phase A — Foundation
-- [x] **A1** Create root files: README, PLAN, PROGRESS, .gitignore, docker-compose
-- [x] **A2** Backend skeleton: pyproject, Dockerfile, src/main.py, config
-- [x] **A3** Database layer: SQLAlchemy base, session, Alembic init
+- `users` — email, password_hash, full_name, mfa_enabled, locale, department, …
+- `roles`, `permissions`, `user_roles`, `role_permissions`
+- `agents` — slug, status, kind, model_*, config_json, capabilities JSONB, file/link policies, tool_names[], cost limits, owner_id
+- `budgets` — agent-scoped periods + alert thresholds
+- `activity_logs` — tokens, cost, duration, status per run
+- `audit_logs` — immutable admin actions
+- `dashboard_configs` — per-user widget layout (JSONB)
+
+### Agent platform (Phase H+)
+
+- `agent_actions` — worker action definitions (slug, input_schema, tool binding)
+- `agent_prompt_templates` — variable templates for workers/supervisors
+- `agent_links` — supervisor ↔ worker edges (`supervises`, `delegates`, …)
+- `agent_files` — uploaded artifacts + extraction metadata
+- `document_chunks` — vector RAG chunks (embedding hooks)
+- `agent_user_permissions` — per-user agent ACL overrides
+- `access_requests` — pending access workflow
+- `notifications` — in-app inbox
+- `external_apis`, `external_api_endpoints` — dynamic HTTP tools
+- `platform_settings` — global LLM provider config
+
+### Enums worth knowing
+
+- `AgentStatus`: draft · active · paused · archived  
+- `AgentKind`: chat · worker · supervisor · file_intake  
+- `ActivityStatus`, `BudgetPeriod`, `AccessRequestStatus`, `NotificationSeverity`
+
+---
+
+## 7. LangChain / LangGraph Learning Path
+
+Integrated into the codebase — read [`docs/langchain-guide.md`](./docs/langchain-guide.md) alongside these steps:
+
+1. **Tools** — `@tool`, `StructuredTool`, registry via `ToolRegistry` + `@register_tool`
+2. **ReAct agent** — `graph_agent.py` + `create_react_agent` pattern
+3. **Memory** — `ConversationMemory` (Redis with in-memory fallback)
+4. **Supervisor routing** — `supervisor_graph.py` (iterate: route → invoke link → FINAL)
+5. **Dynamic tools** — `DynamicToolLoader` from `external_apis` rows
+6. **Agent-as-tool** — `agent_tools.py` delegates to linked agents with permission checks
+7. **Execution trace** — structured steps returned to frontend (`execution_trace.py`)
+
+---
+
+## 8. Design & Motion
+
+UI must follow workspace rule [`.cursor/rules/ui-style-and-motion.mdc`](./.cursor/rules/ui-style-and-motion.mdc):
+
+- **Colors**: Tailwind tokens `brand`, `surface`, `sidebar`, `accent` — match PDF palette
+- **Motion kit** (`frontend/src/components/motion/`): `variants.ts`, `stagger.tsx`, `transitions.tsx`, `shared.tsx`
+- **Route transitions**: `PageTransition` on dashboard `<main>` only — never animate full shell
+- **RTL charts**: `chart-box.tsx` + `recharts-rtl.ts` isolate LTR; metric badges use `formatMetricDelta()` for bidi safety
+- **Admin grid**: `DashboardFourCardGrid` with explicit `col-start` / `row-start` — avoid implicit RTL column-flow bugs
+
+Design skill reference: `.cursor/skills/ui-ux-pro-max/SKILL.md`
+
+---
+
+## 9. Implementation Phases
+
+Each completed step is logged in [`PROGRESS.md`](./PROGRESS.md). Checkboxes here are the **master checklist**; dates live in the journal.
+
+### Phase A — Foundation ✅
+
+- [x] **A1** Root files: README, PLAN, PROGRESS, .gitignore, docker-compose
+- [x] **A2** Backend skeleton: pyproject, Dockerfile, main, config
+- [x] **A3** Database layer: SQLAlchemy base, session, Alembic
 - [x] **A4** Models: User, Role, Permission, Agent, Budget, ActivityLog, AuditLog
-- [x] **A5** Schemas (Pydantic v2): auth, user, agent, budget, activity
-- [x] **A6** Auth: JWT, password hashing, login/register/me endpoints
+- [x] **A5** Schemas (Pydantic v2)
+- [x] **A6** Auth: JWT, login/register/me
 
-### Phase B — Core Backend
-- [x] **B1** Repositories layer (base + per-model)
-- [x] **B2** Services layer (business logic)
-- [x] **B3** API routes: users, agents, budgets, activity, dashboards
-- [x] **B4** Middleware: auth, logging, CORS, rate-limit
-- [x] **B5** Seed data script
+### Phase B — Core Backend ✅
 
-### Phase C — LangChain Integration
-- [x] **C1** `tool_registry.py` with `@register` decorator
-- [x] **C2** Custom tools: budget_lookup, hr_lookup, report_gen, etc.
-- [x] **C3** `agent_factory.py` — build `AgentExecutor` from DB config
-- [x] **C4** `memory.py` — per-agent memory backends *(in-memory placeholder; Redis swap later)*
-- [x] **C5** Agent execution endpoint (`POST /agents/{id}/invoke`) with SSE streaming
+- [x] **B1** Repositories · **B2** Services · **B3** API routes
+- [x] **B4** Middleware: CORS, logging, rate-limit
+- [x] **B5** Seed data
 
-### Phase D — Frontend Foundation
-- [x] **D1** Next.js 15 init, Tailwind, shadcn/ui, RTL setup
-- [x] **D2** Layout: sidebar, header, command palette (⌘K)  *(sidebar/header done; cmdk search stub)*
-- [x] **D3** API client (typed), TanStack Query setup
-- [x] **D4** Auth pages (login) + auth store/hooks + protected routes
+### Phase C — LangChain Integration ✅
 
-### Phase E — Frontend Pages (matching PDF)
-- [x] **E1** Main dashboard (Page 2): stats cards, recent agents, quick prompt
-- [x] **E2** Agent detail / chat view (Page 3): chat panel + charts
-- [x] **E3** Admin overview (Page 4): health, costs, alerts, top agents
-- [x] **E4** Agent creation wizard (Page 5): 5-step stepper with live preview
-- [x] **E5** Users & access (Page 6): table, role matrix, per-agent perms
+- [x] **C1** `tool_registry.py` · **C2** custom tools · **C3** `agent_factory.py`
+- [x] **C4** `memory.py` · **C5** invoke + SSE streaming
 
-### Phase F — Polish
-- [x] **F1** Tests (pytest + vitest)
-- [x] **F2** Docs (architecture, API, LangChain guide)
-- [x] **F3** Dockerize end-to-end + nginx reverse proxy
-- [x] **F4** Seed script + demo data
+### Phase D — Frontend Foundation ✅
 
-### Phase G — Post-PDF hardening (G1–G10)
-- [x] **G1** CORS fix — dev regex for localhost/127.0.0.1/[::1] any port; skip OPTIONS in rate limit
-- [x] **G2** Expanded pytest — CORS, auth flow, route, budgets (9 tests)
-- [x] **G3** Vitest frontend tests — `utils.test.ts`
-- [x] **G4** Docs — `docs/architecture.md`, `api-reference.md`, `langchain-guide.md`
-- [x] **G5** nginx reverse proxy — `nginx/nginx.conf` + compose `prod` profile
-- [x] **G6** Redis conversation memory — `ConversationMemory` with fallback
-- [x] **G7** LangGraph tool-calling — `graph_agent.py` + invoke integration
-- [x] **G8** Budget API — `/budgets`, `/budgets/summary` + admin widgets
-- [x] **G9** Per-agent permissions — model, migration, API, users UI matrix
-- [x] **G10** Quick-prompt routing + JWT refresh + auto-refresh interceptor
+- [x] **D1** Next.js init, Tailwind, shadcn, RTL
+- [x] **D2** Layout: sidebar, header, cmdk stub
+- [x] **D3** API client + TanStack Query
+- [x] **D4** Auth pages + protected routes
 
-### Bonus — Local development
-- [x] **LOCAL-RUN** Run backend + frontend natively (Postgres/Redis in Docker)
-- [x] **LOCAL-RUN-FIX** Fixed email validation + verified auth flow
+### Phase E — PDF Pages ✅
 
----
+- [x] **E1** Dashboard · **E2** Agent detail/chat · **E3** Admin
+- [x] **E4** Creation wizard · **E5** Users & access
 
-## 8. Step Logging Convention
+### Phase F — Polish ✅
 
-Every completed step appends to `PROGRESS.md` like:
+- [x] **F1** Tests · **F2** Docs · **F3** Docker + nginx · **F4** Demo seed
 
-```
-## A1 — Root scaffolding   (✅ 2026-05-18 10:30)
-Created: README.md, PLAN.md, PROGRESS.md, .gitignore, docker-compose.yml
-Notes: chose Docker Compose v2 syntax; named services postgres/redis/backend/frontend/nginx.
-Next: A2 (backend skeleton)
-```
+### Phase G — Post-PDF Hardening ✅
 
-This ensures any future AI agent (or human) can resume work mid-stream.
+- [x] **G1–G10** CORS, expanded pytest, vitest, docs, nginx, Redis memory, LangGraph, budgets API, per-agent permissions, routing + refresh tokens
+
+### Phase H — PDF Full Parity ✅
+
+- [x] **H1** Sidebar counts + workspace/admin view toggle
+- [x] **H2** Agent files upload + RAG ingestion
+- [x] **H3** Prompt templates + improve endpoint
+- [x] **H4** Access request workflow
+- [x] **H5** Page-level PDF UI parity (all 6 pages)
+
+### Phase I — UI Motion & Layout ✅
+
+- [x] **I1** Motion kit (variants, stagger, panel/page transitions)
+- [x] **I2** Login ↔ sidebar logo morph, logout flow
+- [x] **I3** RTL chart fixes, metric badge bidi
+- [x] **I4** Admin 2×2 grid (`DashboardFourCardGrid`)
+- [x] **I5** Wizard autosave isolation, reduced nested motion
+
+### Phase J — Agent Kinds & Capabilities ✅
+
+- [x] **J1** Schema: kind, capabilities, file/link policies, actions, templates, links
+- [x] **J2** `OrchestratorService` capability gates + supervisor path
+- [x] **J3** Wizard 6 steps + capability-aware detail rails
+- [x] **J4** Demo agents: chat, worker, file_intake, supervisor
+- [x] **J5** Tests: `test_agent_capabilities.py`, vitest presets
 
 ---
 
-## 9. Running Locally (target UX)
+## 10. Roadmap — v0.2 (next)
+
+Prioritized backlog. Pick up any `[ ]` item and log completion in `PROGRESS.md`.
+
+### Phase K — Agent UX & editing
+
+- [ ] **K1** Edit-agent flow reusing wizard sub-components (not create-only)
+- [ ] **K2** `input_schema` mini-builder for worker actions (replace key/title dict)
+- [ ] **K3** Chat markdown rendering polish (`chat-markdown.tsx`) — tables, code blocks, streaming
+- [ ] **K4** Agent fix panel workflow (`/agents/[slug]/fix`) wired to validation runner
+- [ ] **K5** Conversations page: thread search, resume, delete
+
+### Phase L — Quality & observability
+
+- [ ] **L1** E2E supervisor invoke with mocked LLM in CI
+- [ ] **L2** Playwright smoke: login → dashboard → invoke demo-chat
+- [ ] **L3** Structured client error reporting (`client_logs` → admin digest)
+- [ ] **L4** Execution trace UI: expand/collapse tool steps, copy debug bundle
+- [ ] **L5** Audit remaining dashboard pages for RTL grid pitfalls (knowledge, settings)
+
+### Phase M — Knowledge & integrations
+
+- [ ] **M1** Knowledge page: org-wide doc upload, chunk browser, re-embed
+- [ ] **M2** Integrations page: external API wizard + test connection
+- [ ] **M3** Vector store backend switch (pgvector or dedicated) — replace in-memory stub
+- [ ] **M4** RAG quality: citation snippets in chat responses
+- [ ] **M5** cursor-to-api production hardening (auth, rate limits, health)
+
+### Phase N — Enterprise readiness (v1 candidates)
+
+- [ ] **N1** Real SAML/OIDC SSO (replace stub button)
+- [ ] **N2** httpOnly cookie auth option (replace localStorage JWT)
+- [ ] **N3** MFA (TOTP) on login
+- [ ] **N4** Multi-tenant org isolation (schema + middleware)
+- [ ] **N5** Budget enforcement hard-stop (not just alerts)
+- [ ] **N6** SOC2-oriented audit export + retention policies
+
+---
+
+## 11. Quality Gates
+
+Run before merging significant work:
 
 ```bash
-# one-time
+# Backend
+cd backend && alembic upgrade head
+pytest tests/ -q
+
+# Frontend
+cd frontend && npm run typecheck
+npm run test -- --run
+npm run build
+
+# Optional: demo seed
+./scripts/demo-prep.sh
+```
+
+**Definition of done** for a feature:
+
+1. API + schema + migration (if needed)
+2. Service layer + permission checks
+3. Frontend surface with loading/error/empty states
+4. At least one automated test (unit or integration)
+5. Entry in `PROGRESS.md`
+6. `graphify update .` if graph exists (keeps `graphify-out/` current)
+
+---
+
+## 12. Step Logging Convention
+
+Every completed step appends to `PROGRESS.md`:
+
+```
+## K1 — Edit-agent flow   (✅ 2026-06-01 14:00)
+**Created:** ...
+**Decisions:** ...
+**Next:** K2
+```
+
+Future agents resume by reading `PROGRESS.md` top-down, then this plan for context.
+
+---
+
+## 13. Running Locally
+
+Quick path — see [`RUNNING.md`](./RUNNING.md) for native vs Docker details.
+
+```bash
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 
-# everything up
-docker compose up -d
+docker compose up -d          # postgres + redis (+ optional full stack)
+cd backend && alembic upgrade head && python -m src.database.seed
+cd frontend && npm run dev
 
-# DB migrations + seed
-docker compose exec backend alembic upgrade head
-docker compose exec backend python -m src.database.seed
-
-# open
-open http://localhost:3000
+open http://localhost:3000    # admin@example.com / admin123
 ```
+
+Production Ubuntu: [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) · `./scripts/install-ubuntu.sh`
 
 ---
 
-## 10. Out-of-Scope (for v0.1)
+## 14. Scope Boundaries
 
-- Real SAML/SSO provider integration (we stub the button + flow)
-- Multi-tenant isolation (single tenant for v0.1)
-- Production-grade SOC 2 controls
-- Vector DB for advanced RAG (we leave hooks; default = in-memory)
+### In scope for v0.1 (done)
+
+Single-tenant enterprise demo with Persian RTL UI, JWT auth, agent CRUD + invoke, budgets, RBAC, audit hooks, four agent kinds, PDF page parity, Docker + cloud deploy docs.
+
+### Out of scope for v0.1 (explicit deferrals)
+
+| Item | Target | Notes |
+|------|--------|-------|
+| Real SAML/SSO | v1 / N1 | Button + flow stubbed |
+| Multi-tenant isolation | v1 / N4 | Single org assumed |
+| Production SOC 2 | v1 / N6 | Basic audit log only |
+| Production vector DB | v0.2 / M3 | Hooks exist; default is lightweight |
+| cmdk global search | v0.2 | Header search stub |
+| httpOnly cookies | v1 / N2 | localStorage JWT today |
+
+### Non-goals
+
+- Building a generic low-code platform unrelated to agents
+- Supporting non-Persian-primary UX (i18n framework can come later)
+- On-prem air-gapped LLM (document cursor-to-api as bridge only)
+
+---
+
+## 15. Technical Debt & Risks
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| LLM gateway downtime | Invoke 503 | `LLM_UNAVAILABLE` envelope, retry UX, platform settings failover |
+| Inferred graph/code edges | Wrong mental model | Prefer AST + docs; verify with tests |
+| RTL + Recharts | Clipped charts | Keep LTR isolation pattern |
+| Long agent runs on Vercel | Timeout | Direct `NEXT_PUBLIC_API_URL` to Railway/Render (see VERCEL.md) |
+| Import cycles in API modules | Startup fragility | Lazy imports where needed; track in graphify report |
+| localStorage JWT | XSS surface | Move to httpOnly in N2 |
+
+---
+
+## 16. References
+
+- PDF wireframe: `پلتفرم سازمانی AI — PDF.pdf`
+- Demo script: [`DEMO.md`](./DEMO.md)
+- Error codes: [`docs/ERRORS.md`](./docs/ERRORS.md)
+- Knowledge graph: `graphify-out/graph.html` (run `/graphify .` to rebuild)

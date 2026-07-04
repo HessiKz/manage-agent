@@ -193,6 +193,36 @@ Note: the stock Docker image does **not** include the Cursor CLI — mount the b
 
 ---
 
+## Fast updates (offline VPS — no 300MB upload)
+
+If the server cannot reach Docker Hub / npm / PyPI (build fails inside Docker on the VPS), build on your laptop and push **only what changed**:
+
+```bash
+cp .deploy.env.example .deploy.env   # VPS_HOST, VPS_PASSWORD
+./scripts/deploy-vps.sh              # default: sync mode
+```
+
+| Mode | When to use | Typical transfer |
+|------|-------------|------------------|
+| **`sync`** (default) | Code / UI changes only | backend ~2MB, frontend rsync delta |
+| **`registry`** | `package.json`, `pyproject.toml`, or Dockerfile changed | only new image layers |
+| **`full`** | First install or registry unavailable | ~320MB tarball |
+
+Examples:
+
+```bash
+./scripts/deploy-vps.sh sync backend          # Python src only
+./scripts/deploy-vps.sh sync frontend         # local npm build + rsync .next output
+./scripts/deploy-vps.sh registry all          # incremental layer pull over SSH tunnel
+./scripts/deploy-vps.sh full frontend         # legacy single-service tarball (~67MB)
+```
+
+`sync` copies files into the running `ma-backend` / `ma-frontend` containers and restarts them — no `docker save`, no full image reload.
+
+`registry` runs a local registry on your machine (`127.0.0.1:5000`), pushes images there, then opens an SSH reverse tunnel so the VPS pulls with Docker layer deduplication (much smaller after the first push).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
