@@ -1,44 +1,40 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Sparkles } from "lucide-react";
+import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { prepareActionsForPublish } from "@/lib/action-inputs";
+import { prepareActionsForPublish, deriveAgentToolNames } from "@/lib/action-inputs";
 import { appAlert } from "@/lib/app-dialog";
+import { formatPersianMonthYear } from "@/lib/persian-date";
 import {
   createAgentWithPermissions,
   checkAgentNameAvailable,
+  fetchAgentBySlug,
+  fetchAgentPermissions,
   fetchAllAgents,
-  fetchMe,
-  fetchTools,
   fetchUsers,
-  startAgentValidation,
+  prepareAgentRuntime,
+  replaceAgentPermissions,
+  startAgentTraining,
   suggestSystemPrompt,
   uploadAgentFile,
+  refreshAgentInstructions,
+  updateAgent,
 } from "@/lib/api";
+
 import {
-  AGENT_EXAMPLES,
-  loadExampleSampleFiles,
-  type AgentExample,
-} from "@/lib/agent-examples";
-import {
-  DEFAULT_FILE_POLICY,
-  EMPTY_API_BINDINGS,
-  filePolicyForCapabilities,
-  FILE_POLICY_WIZARD_ATTACHMENTS,
-  KIND_LABELS,
-  KIND_PRESETS,
-  estimateCostMultiplier,
-} from "@/lib/agent-presets";
-import { ExternalApiPicker } from "@/components/agents/external-api-picker";
-import { deptLabel, statusLabel } from "@/lib/utils";
+  canNavigateToStep,
+  computeSequentialStepComplete,
+  computeStepValidity,
+  getStepBlockMessage,
+  type WizardStepContext,
+} from "@/lib/wizard-step-validation";
+import { handleApiError } from "@/lib/api-error-handler";
 import { PanelTransition } from "@/components/motion/transitions";
-import { AgentToolPicker } from "@/components/agents/agent-tool-picker";
 import { KindPicker } from "@/components/agents/kind-picker";
 import { CapabilityToggles } from "@/components/agents/capability-toggles";
 import { WizardField } from "@/components/agents/wizard-field";
@@ -48,11 +44,56 @@ import { FilePolicyForm, validateFilePolicy } from "@/components/agents/file-pol
 import { ActionRepeater } from "@/components/agents/action-repeater";
 import { TemplateRepeater } from "@/components/agents/template-repeater";
 import { LinkedAgentsPicker } from "@/components/agents/linked-agents-picker";
-import { WizardStagedFiles } from "@/components/agents/wizard-staged-files";
+import { InstructionPromptField } from "@/components/agents/instruction-prompt-field";
+import { ReviewAlertsPlanForm } from "@/components/agents/review-alerts-plan-form";
+import {
+  defaultWidgetPlan,
+  parseReviewAlertRules,
+  validateReviewAlertsPlan,
+  widgetPlanToConfigJson,
+  type AgentWidgetPlan,
+} from "@/lib/widget-plan";
+import { WizardIoPanel, type IoExamples } from "@/components/agents/wizard-io-panel";
+import { WizardProcessStepper } from "@/components/agents/wizard-process-stepper";
+import { WizardTemperatureField } from "@/components/agents/wizard-temperature-field";
+import {
+  WizardPostPublishPanel,
+  postPublishStepReady,
+  suggestPostPublishStep,
+} from "@/components/agents/wizard-post-publish-panel";
+import { resolveTestingPhase, type ValidationReport } from "@/lib/agent-testing-phase";
+import { useWizardSupportBridge } from "@/hooks/use-wizard-support-bridge";
+import { clearStaleWizardCreatedSlug } from "@/lib/support-wizard-mission";
 import { AutosaveLine } from "./autosave-line";
+import { clearDraft, loadDraft, saveDraft } from "./draft";
+import { extractInstructionFileTexts } from "@/lib/instruction-file-text";
+import {
+  DEFAULT_FILE_POLICY,
+  EMPTY_API_BINDINGS,
+  filePolicyForCapabilities,
+  FILE_POLICY_INSTRUCTION_ATTACHMENTS,
+  resolvePublishFileConfig,
+  KIND_LABELS,
+  KIND_PRESETS,
+  estimateCostMultiplier,
+} from "@/lib/agent-presets";
+import { EMPTY_KNOWLEDGE_BINDINGS, parseKnowledgeBindings } from "@/lib/agent-knowledge-bindings";
+import { agentToEditorDraft } from "@/lib/agent-editor-state";
+import { scriptSamplesPublishBlock, agentLikelyNeedsScript } from "@/lib/agent-script-samples";
+import {
+  agentLinksRequired,
+  clampCapabilitiesForKind,
+  shouldShowAgentLinks,
+} from "@/lib/capability-rules";
+import { ExternalApiManager } from "@/components/agents/external-api-manager";
+import { KnowledgeSourcePicker } from "@/components/agents/knowledge-source-picker";
+import { ModelPicker } from "@/components/agents/model-picker";
+import { WIZARD_BOOTSTRAP_STAGES, type LlmLoadingPhase } from "@/lib/llm-loading-state";
+import { LlmProcessIndicator } from "@/components/loading/llm-process-indicator";
 import type {
   AgentAction,
   AgentApiBindings,
+  AgentKnowledgeBindings,
   AgentCapabilities,
   AgentFilePolicy,
   AgentKind,
@@ -60,17 +101,82 @@ import type {
   AgentLinkPolicy,
   AgentPermissionGrantInput,
   AgentPromptTemplate,
+  Agent,
 } from "@/types";
 
-const STEPS = [
-  "پایه",
-  "نوع و توانایی",
-  "اتصال API",
-  "فایل و سیاست",
-  "منطق و دستور",
+function buildWizardConfigJson(
+  plan: AgentWidgetPlan,
+  ioExamples: IoExamples
+): Record<string, unknown> {
+  const base = widgetPlanToConfigJson(plan);
+  const inputText = ioExamples.inputText.trim();
+  const outputText = ioExamples.outputText.trim();
+  if (!inputText && !outputText) return base;
+  return {
+    ...base,
+    io_examples: {
+      ...(inputText ? { input_text: inputText } : {}),
+      ...(outputText ? { output_text: outputText } : {}),
+    },
+  };
+}
+
+function parseIoExamples(config: Record<string, unknown> | undefined): IoExamples {
+  const raw = config?.io_examples as { input_text?: string; output_text?: string } | undefined;
+  return {
+    inputText: raw?.input_text ?? "",
+    outputText: raw?.output_text ?? "",
+  };
+}
+
+function wizardBootstrapPhase(stageId: string): LlmLoadingPhase {
+  switch (stageId) {
+    case "persist":
+      return "preparing";
+    case "runtime":
+      return "tools";
+    case "training":
+      return "generating";
+    default:
+      return "preparing";
+  }
+}
+
+function WizardBootstrapLoading({
+  stageId,
+  className,
+}: {
+  stageId: string;
+  className?: string;
+}) {
+  const label =
+    WIZARD_BOOTSTRAP_STAGES.find((s) => s.id === stageId)?.label ??
+    "در حال آماده‌سازی تست تعاملی…";
+  return (
+    <div data-ma-support="wizard-bootstrap-loading" className={className}>
+      <LlmProcessIndicator
+        variant="panel"
+        phase={wizardBootstrapPhase(stageId)}
+        statusMessage={label}
+        thinkingActive
+        thinkingOpen
+        thinkingContent="در حال ساخت ایجنت، آماده‌سازی محیط اجرا و راه‌اندازی تست تعاملی…"
+        thinkingSummary="آماده‌سازی ویزارد با هوش مصنوعی"
+      />
+    </div>
+  );
+}
+
+const WIZARD_STEPS = [
+  "اطلاعات پایه",
+  "دستورالعمل ایجنت",
+  "هشدار و بازبینی",
+  "ورودی و خروجی",
   "دسترسی‌ها",
-  "بازبینی",
-];
+  "تست و انتشار",
+] as const;
+
+const VISIBLE_STEPS: string[] = [...WIZARD_STEPS];
 
 const DEPARTMENTS = [
   { value: "finance", label: "مالی" },
@@ -81,15 +187,19 @@ const DEPARTMENTS = [
 ];
 
 export default function AgentWizardPage() {
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const isSuperuser = Boolean(useAuthStore((s) => s.user?.is_superuser));
   const [step, setStep] = useState(0);
+  const [visitedSteps, setVisitedSteps] = useState<Set<number>>(() => new Set([0]));
   const [saving, setSaving] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapStage, setBootstrapStage] = useState(WIZARD_BOOTSTRAP_STAGES[0].id);
   const prevStepRef = useRef(0);
 
   const [kind, setKind] = useState<AgentKind>("chat");
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(KIND_PRESETS.chat);
   const [filePolicy, setFilePolicy] = useState<AgentFilePolicy>(DEFAULT_FILE_POLICY);
-  const [linkPolicy] = useState<AgentLinkPolicy>({
+  const [linkPolicy, setLinkPolicy] = useState<AgentLinkPolicy>({
     max_depth: 3,
     default_requires_user_permission: true,
   });
@@ -103,13 +213,12 @@ export default function AgentWizardPage() {
     department: "finance",
     system_prompt: "",
     tool_names: [] as string[],
-    model_name: "auto",
+    model_name: "claude-opus-4-8",
     temperature: 0.2,
   });
-  const [template, setTemplate] = useState("محاسبه حقوق");
-  const [variables, setVariables] = useState([
+  const [variables, setVariables] = useState(() => [
     { key: "overtime_threshold", value: "12" },
-    { key: "period", value: "۱۴۰۲ بهمن" },
+    { key: "period", value: formatPersianMonthYear() },
   ]);
   const [policies, setPolicies] = useState({
     working_hours_only: true,
@@ -118,10 +227,19 @@ export default function AgentWizardPage() {
   });
   const [permissions, setPermissions] = useState<AgentPermissionGrantInput[]>([]);
   const [apiBindings, setApiBindings] = useState<AgentApiBindings>(EMPTY_API_BINDINGS);
+  const [knowledgeBindings, setKnowledgeBindings] = useState<AgentKnowledgeBindings>(
+    EMPTY_KNOWLEDGE_BINDINGS
+  );
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  const [ioExamples, setIoExamples] = useState<IoExamples>({ inputText: "", outputText: "" });
+  const [publishedAgent, setPublishedAgent] = useState<Agent | null>(null);
+  const [widgetPlan, setWidgetPlan] = useState<AgentWidgetPlan>(() => defaultWidgetPlan());
 
-  const [loadingExample, setLoadingExample] = useState(false);
-  const [appliedExample, setAppliedExample] = useState<string | null>(null);
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [restorePromptAt, setRestorePromptAt] = useState<string | null>(null);
+  const draftReady = useRef(false);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [suggestingPrompt, setSuggestingPrompt] = useState(false);
   const [nameCheck, setNameCheck] = useState<{
     slug: string;
@@ -130,19 +248,155 @@ export default function AgentWizardPage() {
   }>({ slug: "", available: true, checking: false });
   const nameCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { data: tools = [] } = useQuery({ queryKey: ["tools"], queryFn: fetchTools });
-  const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
-  const isAdmin = Boolean(me?.is_superuser);
+  const resumeSlug = searchParams.get("slug")?.trim() ?? "";
+  const editMode = searchParams.get("mode") === "edit";
+
+  const { data: users = [] } = useQuery({
+    queryKey: ["users"],
+    queryFn: fetchUsers,
+    enabled: isSuperuser,
+  });
+  const { data: allPermissions = [] } = useQuery({
+    queryKey: ["agent-permissions"],
+    queryFn: fetchAgentPermissions,
+    enabled: editMode && isSuperuser,
+  });
   const { data: allAgents = [] } = useQuery({
     queryKey: ["agents-all"],
     queryFn: async () => (await fetchAllAgents({ page_size: 100 })).items,
   });
 
+  const [permissionsAllowDefault, setPermissionsAllowDefault] = useState(false);
+  const [showAdvancedIo, setShowAdvancedIo] = useState(false);
+
+  const agentPollSlug = publishedAgent?.slug ?? resumeSlug;
+
+  const { data: resumedAgent } = useQuery({
+    queryKey: ["agent-wizard-resume", agentPollSlug],
+    queryFn: () => fetchAgentBySlug(agentPollSlug),
+    enabled: Boolean(agentPollSlug),
+    meta: { suppressErrorToast: true },
+    refetchInterval: (query) => {
+      const a = query.state.data;
+      if (!a) return false;
+      const v = a.config_json?.validation as {
+        state?: string;
+        planning?: { awaiting_answers?: boolean };
+      } | undefined;
+      if (v?.planning?.awaiting_answers) return 2000;
+      if (v?.state === "running" || v?.state === "pending_auto") return 2000;
+      if (v?.state === "training" || v?.state === "dashboard_review") return 3000;
+      if (a.status === "deploying") return 2000;
+      if (a.status === "active" && v?.state && v.state !== "done") return 2000;
+      return false;
+    },
+  });
+
+  const activeAgent = publishedAgent ?? (!editMode ? resumedAgent ?? null : null);
+
   const panelDirection = step >= prevStepRef.current ? "forward" : "backward";
   useEffect(() => {
     prevStepRef.current = step;
   }, [step]);
+
+  useEffect(() => {
+    const draft = loadDraft();
+    if (resumeSlug) {
+      draftReady.current = true;
+      setRestorePromptAt(null);
+      return;
+    }
+    clearStaleWizardCreatedSlug();
+    if (draft && typeof (draft.data as { name?: string })?.name === "string") {
+      setRestorePromptAt(draft.savedAt);
+    } else {
+      draftReady.current = true;
+    }
+  }, [resumeSlug]);
+
+  function applyDraft(data: Record<string, unknown>) {
+    const d = data as Partial<{
+      form: typeof form;
+      kind: AgentKind;
+      capabilities: AgentCapabilities;
+      filePolicy: AgentFilePolicy;
+      actions: AgentAction[];
+      templates: AgentPromptTemplate[];
+      links: AgentLink[];
+      variables: { key: string; value: string }[];
+      policies: typeof policies;
+      permissions: AgentPermissionGrantInput[];
+      apiBindings: AgentApiBindings;
+      knowledgeBindings: AgentKnowledgeBindings;
+      ioExamples: IoExamples;
+      widgetPlan: AgentWidgetPlan;
+      step: number;
+    }>;
+    if (d.form) setForm(d.form);
+    if (d.kind) setKind(d.kind);
+    if (d.capabilities) setCapabilities(d.capabilities);
+    if (d.filePolicy) setFilePolicy(d.filePolicy);
+    if (d.actions) setActions(d.actions);
+    if (d.templates) setTemplates(d.templates);
+    if (d.links) setLinks(d.links);
+    if (d.variables) setVariables(d.variables);
+    if (d.policies) setPolicies(d.policies);
+    if (d.permissions) setPermissions(d.permissions);
+    if (d.apiBindings) setApiBindings(d.apiBindings);
+    if (d.knowledgeBindings) setKnowledgeBindings(d.knowledgeBindings);
+    if (d.ioExamples) setIoExamples(d.ioExamples);
+    if (d.widgetPlan) setWidgetPlan(d.widgetPlan);
+    if (typeof d.step === "number") {
+      const s = Math.min(Math.max(0, d.step), WIZARD_STEPS.length - 1);
+      setStep(s);
+      setVisitedSteps(new Set(Array.from({ length: s + 1 }, (_, i) => i)));
+    }
+  }
+
+  // Debounced real autosave to localStorage once hydration is settled.
+  useEffect(() => {
+    if (!draftReady.current) return;
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      const at = saveDraft({
+        form,
+        kind,
+        capabilities,
+        filePolicy,
+        actions,
+        templates,
+        links,
+        variables,
+        policies,
+        permissions,
+        apiBindings,
+        knowledgeBindings,
+        ioExamples,
+        widgetPlan,
+        step,
+      });
+      if (at) setDraftSavedAt(at);
+    }, 800);
+    return () => {
+      if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    };
+  }, [
+    form,
+    kind,
+    capabilities,
+    filePolicy,
+    actions,
+    templates,
+    links,
+    variables,
+    policies,
+    permissions,
+    apiBindings,
+    knowledgeBindings,
+    ioExamples,
+    widgetPlan,
+    step,
+  ]);
 
   useEffect(() => {
     const trimmed = form.name.trim();
@@ -162,77 +416,268 @@ export default function AgentWizardPage() {
     };
   }, [form.name]);
 
-  const nameConflict = form.name.trim().length >= 2 && !nameCheck.checking && !nameCheck.available;
+  const nameConflict =
+    !editMode &&
+    form.name.trim().length >= 2 &&
+    !nameCheck.checking &&
+    !nameCheck.available;
+
+  const visibleSteps = VISIBLE_STEPS;
+
+  useEffect(() => {
+    if (searchParams.get("step") !== "api") return;
+    setCapabilities((c) =>
+      c.external_apis_enabled ? c : { ...c, external_apis_enabled: true }
+    );
+    const idx = visibleSteps.indexOf("ورودی و خروجی");
+    if (idx >= 0) setStep(idx);
+  }, [searchParams, visibleSteps]);
+
+  useEffect(() => {
+    if (searchParams.get("step") !== "knowledge") return;
+    const idx = visibleSteps.indexOf("دستورالعمل ایجنت");
+    if (idx >= 0) setStep(idx);
+  }, [searchParams, visibleSteps]);
+
+  const resumeHandled = useRef(false);
+  const editHydrated = useRef(false);
+
+  useEffect(() => {
+    if (!resumedAgent) return;
+    if (editMode) {
+      if (editHydrated.current) return;
+      const permRows = allPermissions.filter((p) => p.agent_id === resumedAgent.id);
+      const draft = agentToEditorDraft(resumedAgent, permRows);
+      setForm({
+        name: draft.name,
+        description: draft.description,
+        department: draft.department,
+        system_prompt: draft.systemPrompt,
+        tool_names: resumedAgent.tool_names ?? [],
+        model_name: draft.modelName,
+        temperature: draft.temperature,
+      });
+      setKind(draft.kind);
+      setCapabilities(draft.capabilities);
+      setFilePolicy(draft.filePolicy);
+      setLinkPolicy(draft.linkPolicy);
+      setActions(draft.actions);
+      setTemplates(draft.templates);
+      setLinks(draft.links);
+      setApiBindings(draft.apiBindings);
+      setWidgetPlan(draft.widgetPlan);
+      setKnowledgeBindings(parseKnowledgeBindings(resumedAgent.config_json));
+      setIoExamples(parseIoExamples(resumedAgent.config_json));
+      setPermissions(draft.permissions);
+      setPermissionsAllowDefault(draft.permissions.length === 0);
+      editHydrated.current = true;
+      return;
+    }
+    setPublishedAgent(resumedAgent);
+    if (!resumeSlug || resumeHandled.current) return;
+    resumeHandled.current = true;
+    const idx = visibleSteps.indexOf("تست و انتشار");
+    if (idx >= 0) setStep(idx);
+  }, [resumeSlug, resumedAgent, visibleSteps, editMode, allPermissions]);
+
+  useEffect(() => {
+    setVisitedSteps((prev) => {
+      if (prev.has(step)) return prev;
+      const next = new Set(prev);
+      next.add(step);
+      return next;
+    });
+  }, [step]);
 
   const needsApiStep = Boolean(capabilities.external_apis_enabled);
 
-  const visibleSteps = useMemo(() => {
-    let s = [...STEPS];
-    if (!needsApiStep) {
-      s = s.filter((x) => x !== "اتصال API");
-    }
-    if (!capabilities.file_upload_enabled) {
-      s = s.filter((x) => x !== "فایل و سیاست");
-    }
-    return s;
-  }, [capabilities.file_upload_enabled, needsApiStep]);
+  const hasApiBindings =
+    apiBindings.service_ids.length > 0 || apiBindings.endpoint_ids.length > 0;
 
-  const stepIndex = visibleSteps[step] ?? STEPS[step];
-  const stepHelp = WIZARD_STEP_HELP[stepIndex] ?? WIZARD_STEP_HELP["پایه"];
+  function handleApiBindingsChange(next: AgentApiBindings) {
+    setApiBindings(next);
+    const picked = next.service_ids.length > 0 || next.endpoint_ids.length > 0;
+    if (picked && !capabilities.external_apis_enabled) {
+      setCapabilities((c) => ({ ...c, external_apis_enabled: true }));
+    }
+  }
+
+  function resolvePublishApiBindings() {
+    return hasApiBindings ? apiBindings : undefined;
+  }
+
+  function resolvePublishCapabilities(base: AgentCapabilities) {
+    const clamped = clampCapabilitiesForKind(kind, base);
+    if (hasApiBindings && !clamped.external_apis_enabled) {
+      return { ...clamped, external_apis_enabled: true };
+    }
+    return clamped;
+  }
+
+  const stepIndex = visibleSteps[step] ?? WIZARD_STEPS[0];
+  const onPublishStep = stepIndex === "تست و انتشار";
+  const permissionsStepIdx = visibleSteps.indexOf("دسترسی‌ها");
+  const testingStepIdx = visibleSteps.indexOf("تست و انتشار");
+  const stepHelp = WIZARD_STEP_HELP[stepIndex] ?? WIZARD_STEP_HELP["اطلاعات پایه"];
   const costMult = estimateCostMultiplier(capabilities);
 
-  const instructionFilePolicy = useMemo(
-    () => (capabilities.file_upload_enabled ? filePolicy : FILE_POLICY_WIZARD_ATTACHMENTS),
-    [capabilities.file_upload_enabled, filePolicy]
+  const instructionFilePolicy = FILE_POLICY_INSTRUCTION_ATTACHMENTS;
+  const scriptSamplesRequired = useMemo(
+    () =>
+      agentLikelyNeedsScript(
+        kind,
+        capabilities,
+        deriveAgentToolNames(actions),
+        actions
+      ),
+    [kind, capabilities, actions]
   );
 
+  useWizardSupportBridge({
+    visibleSteps,
+    setStep,
+    setForm,
+    applyKind,
+    setPermissionsAllowDefault,
+  });
+
+  const autoBootstrapRef = useRef(false);
+
   function resolvePublishConfig() {
-    if (stagedFiles.length === 0 || capabilities.file_upload_enabled) {
-      return { capabilities, filePolicy };
+    return resolvePublishFileConfig(
+      capabilities,
+      filePolicy,
+      stagedFiles.length,
+      deriveAgentToolNames(actions)
+    );
+  }
+
+  function goToWizardStep(label: string, fallback?: string) {
+    const idx = visibleSteps.indexOf(label);
+    if (idx >= 0) {
+      setStep(idx);
+      return;
     }
-    const caps = { ...capabilities, file_upload_enabled: true };
-    const fpPreset = filePolicyForCapabilities(caps, form.tool_names);
-    return {
-      capabilities: caps,
-      filePolicy: fpPreset
-        ? { ...DEFAULT_FILE_POLICY, ...fpPreset }
-        : FILE_POLICY_WIZARD_ATTACHMENTS,
-    };
+    if (fallback) {
+      const fb = visibleSteps.indexOf(fallback);
+      if (fb >= 0) setStep(fb);
+    }
+  }
+
+  function openFinalReview() {
+    goToWizardStep("تست و انتشار");
+  }
+
+  type PublishBlock = { title: string; message: string; step?: string; fallback?: string };
+
+  function collectPublishBlock(): PublishBlock | null {
+    if (nameConflict) {
+      return {
+        title: "نام تکراری",
+        message: "این نام قبلاً استفاده شده — لطفاً نام دیگری انتخاب کنید.",
+        step: "اطلاعات پایه",
+      };
+    }
+    const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishConfig();
+    if (publishCaps.file_upload_enabled) {
+      const policyErr = validateFilePolicy(publishFilePolicy);
+      if (policyErr) {
+        return {
+          title: "تنظیمات فایل",
+          message: policyErr,
+          step: "ورودی و خروجی",
+        };
+      }
+    }
+    if (
+      needsApiStep &&
+      !apiBindings.service_ids.length &&
+      !apiBindings.endpoint_ids.length
+    ) {
+      return {
+        title: "اتصال API",
+        message: "حداقل یک سرویس یا endpoint API انتخاب کنید.",
+        step: "دستورالعمل ایجنت",
+      };
+    }
+    const reviewErr = validateReviewAlertsPlan(widgetPlan);
+    if (reviewErr) {
+      return {
+        title: "هشدار و بازبینی",
+        message: reviewErr,
+        step: "هشدار و بازبینی",
+      };
+    }
+    const clampedCaps = clampCapabilitiesForKind(kind, publishCaps);
+    const sampleBlock = scriptSamplesPublishBlock(
+      kind,
+      clampedCaps,
+      deriveAgentToolNames(prepareActionsForPublish(actions)),
+      prepareActionsForPublish(actions),
+      stagedFiles
+    );
+    if (sampleBlock) return sampleBlock;
+    if (agentLinksRequired(kind, clampedCaps)) {
+      const linkType = kind === "supervisor" ? "supervises" : "tool";
+      const selected = links.filter((l) => l.link_type === linkType);
+      if (selected.length === 0) {
+        return {
+          title: kind === "supervisor" ? "زیرایجنت سرپرست" : "فراخوانی ایجنت",
+          message:
+            kind === "supervisor"
+              ? "برای ایجنت سرپرست حداقل یک زیرایجنت انتخاب کنید."
+              : "با فعال بودن «فراخوانی ایجنت‌ها» حداقل یک ایجنت مقصد انتخاب کنید.",
+          step: "ورودی و خروجی",
+        };
+      }
+    }
+    return null;
   }
 
   function applyKind(next: AgentKind, caps: AgentCapabilities) {
+    const clamped = clampCapabilitiesForKind(next, caps);
     setKind(next);
-    setCapabilities(caps);
-    const fpPreset = filePolicyForCapabilities(caps, form.tool_names);
+    setCapabilities(clamped);
+    if (!clamped.templates_enabled) {
+      setTemplates([]);
+    }
+    setLinks((prev) => {
+      if (next === "supervisor") {
+        return prev.filter((l) => l.link_type === "supervises");
+      }
+      if (clamped.can_call_agents) {
+        return prev.filter((l) => l.link_type === "tool");
+      }
+      return [];
+    });
+    const fpPreset = filePolicyForCapabilities(clamped, form.tool_names);
     if (fpPreset) setFilePolicy({ ...DEFAULT_FILE_POLICY, ...fpPreset });
-    if (!caps.external_apis_enabled) {
+    if (!clamped.external_apis_enabled) {
       setApiBindings(EMPTY_API_BINDINGS);
     }
   }
 
-  async function applyExample(example: AgentExample) {
-    setLoadingExample(true);
-    try {
-      setKind(example.kind);
-      setCapabilities(example.capabilities);
-      setFilePolicy(example.filePolicy ?? DEFAULT_FILE_POLICY);
-      setForm({ ...example.form });
-      setActions(example.actions.map((a, i) => ({ ...a, order_index: i })));
-      setTemplates(example.templates.map((t, i) => ({ ...t, order_index: i })));
+  function updateCapabilities(next: AgentCapabilities) {
+    const clamped = clampCapabilitiesForKind(kind, next);
+    setCapabilities(clamped);
+    if (!clamped.templates_enabled) {
+      setTemplates([]);
+    }
+    if (!shouldShowAgentLinks(kind, clamped)) {
       setLinks([]);
+    } else if (kind === "supervisor") {
+      setLinks((prev) => prev.filter((l) => l.link_type === "supervises"));
+    } else {
+      setLinks((prev) => prev.filter((l) => l.link_type === "tool"));
+    }
+    if (!clamped.external_apis_enabled) {
       setApiBindings(EMPTY_API_BINDINGS);
-      const files = await loadExampleSampleFiles(example);
-      setStagedFiles(files);
-      setAppliedExample(example.id);
-      setStep(0);
-    } finally {
-      setLoadingExample(false);
     }
   }
 
   async function suggestPrompt() {
     if (!form.name.trim()) {
-      await appAlert({ title: "نام ایجنت", message: "ابتدا نام ایجنت را در مرحله «پایه» وارد کنید." });
+      await appAlert({ title: "نام ایجنت", message: "ابتدا نام ایجنت را در مرحله «اطلاعات پایه» وارد کنید." });
       return;
     }
     setSuggestingPrompt(true);
@@ -245,6 +690,7 @@ export default function AgentWizardPage() {
         tool_names: form.tool_names,
         capabilities: capabilities as unknown as Record<string, boolean>,
         existing_prompt: form.system_prompt || undefined,
+        instruction_files: await extractInstructionFileTexts(stagedFiles),
       });
       setForm((f) => ({ ...f, system_prompt: suggested }));
     } catch {
@@ -280,60 +726,247 @@ export default function AgentWizardPage() {
   const apiSelectionCount =
     apiBindings.service_ids.length + apiBindings.endpoint_ids.length;
 
-  async function publish() {
-    if (nameConflict) {
-      await appAlert({
-        title: "نام تکراری",
-        message: "این نام قبلاً استفاده شده — لطفاً نام دیگری انتخاب کنید.",
+  const stepComplete = useMemo(() => {
+    const ctx: WizardStepContext = {
+      form,
+      nameConflict,
+      nameChecking: nameCheck.checking,
+      kind,
+      capabilities,
+      filePolicy,
+      stagedFiles,
+      actions,
+      links,
+      widgetPlan,
+      needsApiStep,
+      apiBindings,
+      permissions,
+      permissionsAllowDefault,
+    };
+    const intrinsic = computeStepValidity(ctx);
+    const step6 = activeAgent
+      ? resolveTestingPhase(
+          activeAgent.status,
+          (activeAgent.config_json?.validation ?? null) as ValidationReport | null
+        ) === "success"
+      : false;
+    return computeSequentialStepComplete(intrinsic, step6);
+  }, [
+    form,
+    nameConflict,
+    nameCheck.checking,
+    kind,
+    capabilities,
+    filePolicy,
+    stagedFiles,
+    actions,
+    links,
+    widgetPlan,
+    needsApiStep,
+    apiBindings,
+    permissions,
+    permissionsAllowDefault,
+    activeAgent,
+  ]);
+
+  const stepValidationCtx: WizardStepContext = useMemo(
+    () => ({
+      form,
+      nameConflict,
+      nameChecking: nameCheck.checking,
+      kind,
+      capabilities,
+      filePolicy,
+      stagedFiles,
+      actions,
+      links,
+      widgetPlan,
+      needsApiStep,
+      apiBindings,
+      permissions,
+      permissionsAllowDefault,
+    }),
+    [
+      form,
+      nameConflict,
+      nameCheck.checking,
+      kind,
+      capabilities,
+      filePolicy,
+      stagedFiles,
+      actions,
+      links,
+      widgetPlan,
+      needsApiStep,
+      apiBindings,
+      permissions,
+      permissionsAllowDefault,
+    ]
+  );
+
+  function refreshPublishedAgent() {
+    const slug = publishedAgent?.slug ?? resumeSlug;
+    if (!slug) return;
+    void fetchAgentBySlug(slug).then(setPublishedAgent);
+  }
+
+  async function persistAgent(): Promise<Agent> {
+    const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishConfig();
+    const clampedCaps = resolvePublishCapabilities(publishCaps);
+    const preparedActions = prepareActionsForPublish(actions);
+    const toolNames = deriveAgentToolNames(preparedActions);
+    const existing = publishedAgent ?? resumedAgent ?? null;
+
+    if (existing) {
+      const updated = await updateAgent(existing.id, {
+        ...form,
+        kind,
+        capabilities: clampedCaps,
+        file_policy: publishFilePolicy,
+        agent_link_policy: linkPolicy,
+        tool_names: toolNames,
+        actions: preparedActions,
+        templates,
+        links,
+        api_bindings: resolvePublishApiBindings(),
+        knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
+        config_json: buildWizardConfigJson(widgetPlan, ioExamples),
       });
+      if (permissions.length) {
+        await replaceAgentPermissions(updated.id, permissions);
+      }
+      for (const file of stagedFiles) {
+        await uploadAgentFile(updated.id, file);
+      }
+      const hasInstructionAttachment = stagedFiles.some((f) =>
+        f.name.startsWith("instruction__")
+      );
+      await refreshAgentInstructions(updated.id, {
+        instruction_text: form.system_prompt || undefined,
+        force: hasInstructionAttachment || Boolean(form.system_prompt?.trim()),
+      });
+      return updated;
+    }
+
+    const agent = await createAgentWithPermissions({
+      ...form,
+      kind,
+      capabilities: clampedCaps,
+      file_policy: publishFilePolicy,
+      agent_link_policy: linkPolicy,
+      tool_names: toolNames,
+      actions: preparedActions,
+      templates,
+      links,
+      permissions: permissions.length ? permissions : undefined,
+      api_bindings: resolvePublishApiBindings(),
+      knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
+      config_json: buildWizardConfigJson(widgetPlan, ioExamples),
+    });
+    for (const file of stagedFiles) {
+      await uploadAgentFile(agent.id, file);
+    }
+    const hasInstructionAttachment = stagedFiles.some((f) => f.name.startsWith("instruction__"));
+    const compiled = await refreshAgentInstructions(agent.id, {
+      instruction_text: form.system_prompt || undefined,
+      force: hasInstructionAttachment || Boolean(form.system_prompt?.trim()),
+    });
+    const instructionMeta = compiled.config_json?.instruction_prompt as
+      | { status?: string; rule_count?: number }
+      | undefined;
+    if (hasInstructionAttachment && instructionMeta?.status === "failed") {
+      await appAlert({
+        title: "هشدار دستورالعمل",
+        message:
+          "فایل دستورالعمل پیوست شد اما کامپایل کامل نشد. قبل از تست، دوباره ذخیره کنید یا API مدل را بررسی کنید.",
+        tone: "danger",
+      });
+    }
+    try {
+      sessionStorage.setItem("ma_wizard_created_slug", agent.slug);
+    } catch {
+      /* private mode */
+    }
+    clearDraft();
+    setPublishedAgent(agent);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("slug", agent.slug);
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      /* ignore */
+    }
+    return agent;
+  }
+
+  async function enterTestingStep() {
+    const block = collectPublishBlock();
+    if (block) {
+      if (block.step) goToWizardStep(block.step, block.fallback);
+      await appAlert({ title: block.title, message: block.message, tone: "danger" });
       return;
     }
-    const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishConfig();
-    if (publishCaps.file_upload_enabled) {
-      const policyErr = validateFilePolicy(publishFilePolicy);
-      if (policyErr) {
-        await appAlert({ title: "تنظیمات فایل", message: policyErr });
-        return;
-      }
+    const permBlock = getStepBlockMessage(
+      visibleSteps.indexOf("دسترسی‌ها"),
+      stepValidationCtx
+    );
+    if (permBlock) {
+      await appAlert({ title: permBlock.title, message: permBlock.message, tone: "danger" });
+      return;
     }
-    if (
-      needsApiStep &&
-      !apiBindings.service_ids.length &&
-      !apiBindings.endpoint_ids.length
-    ) {
+
+    const testingIdx = visibleSteps.indexOf("تست و انتشار");
+    setBootstrapping(true);
+    setBootstrapStage("persist");
+    try {
+      let agent = publishedAgent ?? resumedAgent ?? null;
+      if (!agent) {
+        agent = await persistAgent();
+      }
+      setBootstrapStage("runtime");
+      await prepareAgentRuntime(agent.id);
+      setBootstrapStage("training");
+      await startAgentTraining(agent.id);
+      const fresh = await fetchAgentBySlug(agent.slug);
+      setPublishedAgent(fresh);
+      if (testingIdx >= 0) setStep(testingIdx);
+    } catch (e) {
+      const apiErr = handleApiError(e, { event: "agent.wizard.bootstrap" });
+      const detail = apiErr.requestId
+        ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
+        : apiErr.message;
       await appAlert({
-        title: "اتصال API",
-        message: "حداقل یک سرویس یا endpoint API انتخاب کنید.",
+        title: "خطا در آماده‌سازی تست",
+        message: detail,
+        tone: "danger",
       });
+    } finally {
+      setBootstrapping(false);
+    }
+  }
+
+  async function publish() {
+    const block = collectPublishBlock();
+    if (block) {
+      if (block.step) goToWizardStep(block.step, block.fallback);
+      await appAlert({ title: block.title, message: block.message, tone: "danger" });
       return;
     }
     setSaving(true);
     try {
-      const agent = await createAgentWithPermissions({
-        ...form,
-        kind,
-        capabilities: publishCaps,
-        file_policy: publishFilePolicy,
-        agent_link_policy: linkPolicy,
-        actions: prepareActionsForPublish(actions, form.tool_names),
-        templates,
-        links,
-        permissions: permissions.length ? permissions : undefined,
-        api_bindings: needsApiStep ? apiBindings : undefined,
-      });
-      for (const file of stagedFiles) {
-        await uploadAgentFile(agent.id, file);
-      }
-      await startAgentValidation(agent.id);
-      const qs = new URLSearchParams({
-        slug: agent.slug,
-        name: agent.name,
-      });
-      router.push(`/agents/create/testing?${qs.toString()}`);
-    } catch {
+      await persistAgent();
       await appAlert({
-        title: "خطا",
-        message: "خطا در ایجاد ایجنت",
+        title: "ذخیره شد",
+        message: "تغییرات ایجنت با موفقیت ذخیره شد.",
+      });
+    } catch (e) {
+      const apiErr = handleApiError(e, { event: "agent.wizard.publish" });
+      const detail = apiErr.requestId
+        ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
+        : apiErr.message;
+      await appAlert({
+        title: "خطا در انتشار",
+        message: detail,
         tone: "danger",
       });
     } finally {
@@ -341,7 +974,19 @@ export default function AgentWizardPage() {
     }
   }
 
-  function nextStep() {
+  async function nextStep() {
+    const block = getStepBlockMessage(step, stepValidationCtx);
+    if (block) {
+      void appAlert({ title: block.title, message: block.message, tone: "danger" });
+      return;
+    }
+
+    const permissionsIdx = visibleSteps.indexOf("دسترسی‌ها");
+    if (step === permissionsIdx) {
+      await enterTestingStep();
+      return;
+    }
+
     setStep((s) => Math.min(s + 1, visibleSteps.length - 1));
   }
 
@@ -349,112 +994,142 @@ export default function AgentWizardPage() {
     setStep((s) => Math.max(s - 1, 0));
   }
 
+  useEffect(() => {
+    if (!onPublishStep || activeAgent || bootstrapping || saving || autoBootstrapRef.current) {
+      return;
+    }
+    autoBootstrapRef.current = true;
+    void enterTestingStep().finally(() => {
+      autoBootstrapRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once when opening test step
+  }, [onPublishStep, activeAgent, bootstrapping, saving]);
+
   return (
-    <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
+    <div className="mx-auto max-w-4xl space-y-6 p-6">
+        {!isSuperuser && (
+          <div
+            className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950"
+            data-ma-support="wizard-admin-only"
+            role="alert"
+          >
+            ساخت ایجنت فقط برای ادمین پلتفرم مجاز است — از نوار کنار «نمای ادمین» را فعال کنید
+            یا از مدیر سیستم بخواهید.
+          </div>
+        )}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-stone-900">ساخت ایجنت جدید</h1>
+            <h1 className="text-2xl font-bold text-stone-900">
+              {editMode ? "ویرایش ایجنت" : "ساخت ایجنت جدید"}
+            </h1>
             <p className="mt-1 max-w-xl text-sm text-stone-500">
-              مرحله‌به‌مرحله تنظیم کنید — در هر بخش توضیح کوتاه می‌بینید؛ نیازی به دانش فنی نیست.
+              شش مرحله — از اطلاعات پایه تا تست و انتشار — در همین ویزارد انجام می‌شود.
             </p>
-            <AutosaveLine />
+            <AutosaveLine savedAt={draftSavedAt} />
           </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setStep(visibleSteps.length - 1)}>
-              پیش‌نمایش
-            </Button>
-            <Button onClick={publish} disabled={saving || !form.name || nameConflict || nameCheck.checking}>
-              {saving ? "در حال انتشار…" : "انتشار"}
-            </Button>
+          <div className="flex flex-wrap gap-2">
+            {!onPublishStep ? (
+              <Button variant="secondary" onClick={openFinalReview}>
+                مرور نهایی
+              </Button>
+            ) : editMode ? (
+              <Button
+                data-ma-support="wizard-save"
+                onClick={() => void publish()}
+                disabled={
+                  saving ||
+                  bootstrapping ||
+                  !form.name ||
+                  nameConflict ||
+                  nameCheck.checking
+                }
+              >
+                {saving ? "در حال ذخیره…" : "ذخیره تغییرات"}
+              </Button>
+            ) : null}
           </div>
         </div>
 
-        {isAdmin && (
-          <Card className="border-dashed border-brand-300 bg-brand-50/40">
-            <CardBody className="space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="flex items-center gap-1.5 text-sm font-bold text-stone-900">
-                    <Sparkles className="h-4 w-4 text-brand-600" />
-                    استفاده از نمونه (ویژه ادمین)
-                  </p>
-                  <p className="mt-0.5 text-xs text-stone-500">
-                    یک نمونه را انتخاب کنید تا همه‌ی مراحل با داده آماده پر شود — برای تست سریع.
-                    فایل‌های لازم هم خودکار پیوست می‌شوند.
-                  </p>
-                </div>
-                {loadingExample && (
-                  <span className="text-xs text-brand-700">در حال بارگذاری نمونه…</span>
-                )}
+        {restorePromptAt && (
+          <Card className="border-brand-300 bg-brand-50/60">
+            <CardBody className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-stone-700">
+                یک پیش‌نویس ذخیره‌شده پیدا شد. می‌خواهید ادامه دهید؟
+                <span className="mr-1 text-xs text-stone-400">
+                  (فایل‌های پیوست ذخیره نمی‌شوند)
+                </span>
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => {
+                    const draft = loadDraft();
+                    if (draft) {
+                      applyDraft(draft.data);
+                      setDraftSavedAt(draft.savedAt);
+                    }
+                    draftReady.current = true;
+                    setRestorePromptAt(null);
+                  }}
+                >
+                  بازیابی پیش‌نویس
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    clearDraft();
+                    draftReady.current = true;
+                    setRestorePromptAt(null);
+                  }}
+                >
+                  شروع تازه
+                </Button>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {AGENT_EXAMPLES.map((ex) => {
-                  const active = appliedExample === ex.id;
-                  return (
-                    <button
-                      key={ex.id}
-                      type="button"
-                      disabled={loadingExample}
-                      onClick={() => applyExample(ex)}
-                      className={`rounded-xl border p-3 text-right transition-colors disabled:opacity-60 ${
-                        active
-                          ? "border-brand-500 bg-white shadow-glow"
-                          : "border-stone-200 bg-white hover:border-brand-300"
-                      }`}
-                    >
-                      <p className="text-sm font-semibold text-stone-900">{ex.label}</p>
-                      <p className="mt-0.5 text-xs leading-relaxed text-stone-500">{ex.summary}</p>
-                      {ex.sampleFiles.length > 0 && (
-                        <span className="mt-1.5 inline-flex items-center rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-semibold text-brand-700">
-                          {ex.sampleFiles.length} فایل نمونه
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-              {appliedExample && (
-                <p className="text-xs font-medium text-brand-700">
-                  نمونه اعمال شد — می‌توانید مراحل را بازبینی و سپس «انتشار» کنید.
-                </p>
-              )}
             </CardBody>
           </Card>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          {visibleSteps.map((label, i) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => setStep(i)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors duration-150 ${
-                i === step ? "bg-brand-600 text-white" : "bg-stone-100 text-stone-700 hover:bg-stone-200"
-              }`}
-            >
-              {i + 1}. {label}
-            </button>
-          ))}
-        </div>
+        <WizardProcessStepper
+          steps={visibleSteps}
+          currentIndex={step}
+          stepComplete={stepComplete}
+          onStepClick={(i) => {
+            if (
+              !canNavigateToStep(i, stepComplete, step, {
+                lastStepRequiresAgent: true,
+                hasActiveAgent: Boolean(activeAgent),
+              })
+            ) {
+              const block = getStepBlockMessage(
+                i > step ? step : Math.max(0, i - 1),
+                stepValidationCtx
+              );
+              if (block) {
+                void appAlert({ title: block.title, message: block.message, tone: "danger" });
+              }
+              return;
+            }
+            setStep(i);
+          }}
+        />
 
         <Card>
           <CardBody className="space-y-4">
             <PanelTransition transitionKey={String(stepIndex)} direction={panelDirection} preset="fade" mode="wait">
-              <div className="space-y-4">
+              <div className="space-y-4" data-ma-support="wizard-step-body">
                 <WizardStepIntro
                   title={stepHelp.title}
                   description={stepHelp.description}
                   tip={stepHelp.tip}
                 />
 
-                {stepIndex === "پایه" && (
+                {stepIndex === "اطلاعات پایه" && (
                   <>
                     <WizardField
                       label={FIELD_HELP.name.label}
                       hint={FIELD_HELP.name.hint}
                     >
                       <Input
+                        data-ma-support="wizard-name"
                         value={form.name}
                         onChange={(e) => setForm({ ...form, name: e.target.value })}
                         placeholder={FIELD_HELP.name.placeholder}
@@ -464,13 +1139,26 @@ export default function AgentWizardPage() {
                       {form.name.trim().length >= 2 && (
                         <div className="mt-1.5 space-y-0.5">
                           {nameCheck.checking ? (
-                            <p className="text-xs text-stone-400">در حال بررسی نام…</p>
+                            <p
+                              className="text-xs text-stone-400"
+                              data-ma-support="wizard-name-checking"
+                            >
+                              در حال بررسی نام…
+                            </p>
                           ) : nameConflict ? (
-                            <p className="text-xs font-medium text-accent-red">
+                            <p
+                              className="text-xs font-medium text-accent-red"
+                              data-ma-support="wizard-name-error"
+                            >
                               ایجنت با شناسه «{nameCheck.slug}» از قبل وجود دارد — نام دیگری انتخاب کنید.
                             </p>
                           ) : nameCheck.slug ? (
-                            <p className="text-xs text-brand-700">شناسه: {nameCheck.slug} · در دسترس</p>
+                            <p
+                              className="text-xs text-brand-700"
+                              data-ma-support="wizard-name-slug-preview"
+                            >
+                              شناسه پیشنهادی: {nameCheck.slug} · در دسترس (هنوز ذخیره نشده)
+                            </p>
                           ) : null}
                         </div>
                       )}
@@ -480,6 +1168,7 @@ export default function AgentWizardPage() {
                       hint={FIELD_HELP.description.hint}
                     >
                       <Textarea
+                        data-ma-support="wizard-description"
                         value={form.description}
                         onChange={(e) => setForm({ ...form, description: e.target.value })}
                         rows={3}
@@ -491,6 +1180,7 @@ export default function AgentWizardPage() {
                       hint={FIELD_HELP.department.hint}
                     >
                       <select
+                        data-ma-support="wizard-department"
                         className="w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm"
                         value={form.department}
                         onChange={(e) => setForm({ ...form, department: e.target.value })}
@@ -502,160 +1192,140 @@ export default function AgentWizardPage() {
                         ))}
                       </select>
                     </WizardField>
-                    <details className="rounded-xl border border-stone-200 bg-stone-50/50 px-4 py-3">
-                      <summary className="cursor-pointer text-sm font-semibold text-stone-700">
-                        تنظیمات پیشرفته مدل (اختیاری)
-                      </summary>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        <WizardField label={FIELD_HELP.model.label} hint={FIELD_HELP.model.hint}>
-                          <Input
-                            value={form.model_name}
-                            onChange={(e) => setForm({ ...form, model_name: e.target.value })}
-                            placeholder={FIELD_HELP.model.placeholder}
-                            dir="ltr"
-                            className="text-left font-mono text-sm"
-                          />
-                        </WizardField>
-                        <WizardField
-                          label={FIELD_HELP.temperature.label}
-                          hint={FIELD_HELP.temperature.hint}
-                        >
-                          <Input
-                            type="number"
-                            value={form.temperature}
-                            onChange={(e) =>
-                              setForm({ ...form, temperature: Number(e.target.value) })
-                            }
-                            min={0}
-                            max={2}
-                            step={0.1}
-                          />
-                        </WizardField>
-                      </div>
-                    </details>
-                  </>
-                )}
-
-                {stepIndex === "نوع و توانایی" && (
-                  <>
-                    <KindPicker value={kind} onChange={applyKind} />
-                    <Card>
-                      <CardHeader>
-                        <h4 className="font-bold">توانایی‌های اضافه</h4>
-                        <p className="mt-1 text-xs font-normal text-stone-500">
-                          هر مورد یک قابلیت جداست — مثلاً «آپلود فایل» یا «اتصال API». نوع ایجنت را
-                          عوض نکنید؛ فقط روشن/خاموش کنید.
-                        </p>
-                      </CardHeader>
-                      <CardBody>
-                        <CapabilityToggles value={capabilities} onChange={setCapabilities} />
-                      </CardBody>
-                    </Card>
-                  </>
-                )}
-
-                {stepIndex === "اتصال API" && (
-                  <div className="space-y-3">
-                    <p className="text-sm leading-relaxed text-stone-600">
-                      سرویس بیرونی یعنی برنامه دیگری در شرکت (مثلاً سامانه بانک یا پرسنلی). ایجنت
-                      فقط به مواردی که اینجا انتخاب کنید دسترسی دارد.
-                    </p>
-                    <ExternalApiPicker value={apiBindings} onChange={setApiBindings} />
-                  </div>
-                )}
-
-                {stepIndex === "فایل و سیاست" && (
-                  <div className="space-y-4">
-                    <FilePolicyForm value={filePolicy} onChange={setFilePolicy} />
-                    <WizardStagedFiles
-                      files={stagedFiles}
-                      onChange={setStagedFiles}
-                      filePolicy={filePolicy}
+                    <ModelPicker
+                      value={form.model_name}
+                      onChange={(model_name) => setForm((f) => ({ ...f, model_name }))}
                     />
-                  </div>
+                    <WizardTemperatureField
+                      value={form.temperature}
+                      onChange={(temperature) => setForm((f) => ({ ...f, temperature }))}
+                    />
+                  </>
                 )}
 
-                {stepIndex === "منطق و دستور" && (
+                {stepIndex === "دستورالعمل ایجنت" && (
                   <div className="space-y-6">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-stone-800">
-                            {FIELD_HELP.systemPrompt.label}
-                          </p>
-                          <p className="mt-1 text-xs text-stone-500">{FIELD_HELP.systemPrompt.hint}</p>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          className="shrink-0"
-                          disabled={suggestingPrompt || !form.name.trim()}
-                          onClick={suggestPrompt}
-                        >
-                          <Sparkles className="h-4 w-4" />
-                          {suggestingPrompt ? "در حال پیشنهاد…" : "پیشنهاد متن"}
-                        </Button>
-                      </div>
-                      <Textarea
-                        value={form.system_prompt}
-                        onChange={(e) => setForm({ ...form, system_prompt: e.target.value })}
-                        rows={6}
-                        placeholder={FIELD_HELP.systemPrompt.placeholder}
-                      />
-                    </div>
-
-                    <WizardStagedFiles
+                    <InstructionPromptField
+                      label={FIELD_HELP.systemPrompt.label}
+                      hint={FIELD_HELP.systemPrompt.hint}
+                      placeholder={FIELD_HELP.systemPrompt.placeholder}
+                      textareaSupportId="wizard-system-prompt"
+                      value={form.system_prompt}
+                      onChange={(v) => setForm({ ...form, system_prompt: v })}
                       files={stagedFiles}
-                      onChange={setStagedFiles}
+                      onFilesChange={setStagedFiles}
                       filePolicy={instructionFilePolicy}
-                      title="فایل‌های مرجع دستورالعمل (اختیاری)"
-                      description="قالب اکسل، PDF راهنما یا هر فایلی که ایجنت باید طبق آن عمل کند — بعد از انتشار به ایجنت پیوست می‌شود."
+                      onSuggest={suggestPrompt}
+                      suggesting={suggestingPrompt}
+                      suggestDisabled={!form.name.trim()}
                     />
-
                     {capabilities.actions_enabled && (
                       <ActionRepeater actions={actions} onChange={setActions} />
                     )}
                     {capabilities.templates_enabled && (
                       <TemplateRepeater templates={templates} onChange={setTemplates} />
                     )}
-                    {(capabilities.can_call_agents || capabilities.supervisor_enabled) && (
-                      <LinkedAgentsPicker
-                        agents={allAgents}
-                        links={links}
-                        supervisorMode={capabilities.supervisor_enabled}
-                        canCallAgents={capabilities.can_call_agents}
-                        onChange={setLinks}
+                    <div className="space-y-3 border-t border-stone-100 pt-6">
+                      <p className="text-sm font-semibold text-stone-800">منابع دانش و API</p>
+                      <KnowledgeSourcePicker
+                        knowledgeBindings={knowledgeBindings}
+                        onKnowledgeChange={setKnowledgeBindings}
+                        apiBindings={apiBindings}
+                        onApiChange={handleApiBindingsChange}
                       />
-                    )}
-
-                    <Card>
-                      <CardHeader>
-                        <h4 className="font-bold">امکانات کمکی (در صورت نیاز)</h4>
-                        <p className="mt-1 text-xs font-normal text-stone-500">
-                          اگر ایجنت باید فایل پردازش کند، گزارش بسازد یا داده پرسنلی بخواند — فقط
-                          موارد لازم را فعال کنید.
-                        </p>
-                      </CardHeader>
-                      <CardBody>
-                        <AgentToolPicker
-                          tools={tools}
-                          selected={form.tool_names}
-                          onChange={(slugs) => setForm((f) => ({ ...f, tool_names: slugs }))}
-                          compact
-                          wizardOnly
-                        />
-                      </CardBody>
-                    </Card>
+                    </div>
                   </div>
                 )}
 
+                {stepIndex === "ورودی و خروجی" && (
+                  <div className="space-y-6">
+                    <KindPicker value={kind} onChange={applyKind} />
+                    {(kind !== "chat" || showAdvancedIo) && (
+                      <Card>
+                        <CardHeader>
+                          <h4 className="font-bold">توانایی‌ها و ورودی/خروجی</h4>
+                          <p className="mt-1 text-xs font-normal text-stone-500">
+                            قابلیت‌های اضافه مثل فایل، API و فراخوانی ایجنت.
+                          </p>
+                        </CardHeader>
+                        <CardBody className="space-y-4">
+                          <CapabilityToggles
+                            kind={kind}
+                            value={capabilities}
+                            onChange={updateCapabilities}
+                          />
+                          {shouldShowAgentLinks(kind, capabilities) && (
+                            <LinkedAgentsPicker
+                              agents={allAgents}
+                              links={links}
+                              supervisorMode={kind === "supervisor"}
+                              canCallAgents={capabilities.can_call_agents}
+                              onChange={setLinks}
+                            />
+                          )}
+                        </CardBody>
+                      </Card>
+                    )}
+                    {kind === "chat" && !showAdvancedIo && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="text-sm"
+                        onClick={() => setShowAdvancedIo(true)}
+                      >
+                        تنظیمات پیشرفته (فایل، API، …)
+                      </Button>
+                    )}
+                    {needsApiStep && (
+                      <div className="space-y-6">
+                        <ExternalApiManager compact />
+                      </div>
+                    )}
+                    {capabilities.file_upload_enabled && (
+                      <FilePolicyForm value={filePolicy} onChange={setFilePolicy} />
+                    )}
+                    <WizardIoPanel
+                      stagedFiles={stagedFiles}
+                      onFilesChange={setStagedFiles}
+                      filePolicy={filePolicy}
+                      ioExamples={ioExamples}
+                      onIoExamplesChange={setIoExamples}
+                    />
+                  </div>
+                )}
+
+                {stepIndex === "هشدار و بازبینی" && (
+                  <ReviewAlertsPlanForm value={widgetPlan} onChange={setWidgetPlan} />
+                )}
+
                 {stepIndex === "دسترسی‌ها" && (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
+                    {bootstrapping ? (
+                      <WizardBootstrapLoading stageId={bootstrapStage} />
+                    ) : (
+                      <>
                     <p className="text-sm leading-relaxed text-stone-600">
-                      فقط افرادی که تیک می‌خورند می‌توانند این ایجنت را ببینند و اجرا کنند — حتی اگر
-                      نقش کلی دیگری در سازمان داشته باشند.
+                      فقط افرادی که تیک می‌خورند می‌توانند این ایجنت را ببینند و اجرا کنند.
                     </p>
+                    <p
+                      className="text-xs font-medium text-brand-800"
+                      data-ma-support="wizard-permissions-count"
+                    >
+                      {permissionsAllowDefault
+                        ? "دسترسی پیش‌فرض سازمان فعال است"
+                        : `${permissions.length} کاربر انتخاب شده`}
+                    </p>
+                    <label className="flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50/80 p-3 text-sm">
+                      <input
+                        type="checkbox"
+                        data-ma-support="wizard-permissions-default"
+                        checked={permissionsAllowDefault}
+                        onChange={(e) => setPermissionsAllowDefault(e.target.checked)}
+                      />
+                      <span>دسترسی پیش‌فرض سازمان (بدون محدودیت کاربر خاص)</span>
+                    </label>
                     <div className="max-h-64 space-y-2 overflow-y-auto">
-                      {users.map((u) => {
+                      {users.map((u, userIdx) => {
                         const grant = permissions.find((p) => p.user_id === u.id);
                         const selected = Boolean(grant);
                         return (
@@ -665,6 +1335,9 @@ export default function AgentWizardPage() {
                           >
                             <input
                               type="checkbox"
+                              data-ma-support={
+                                userIdx === 0 ? "wizard-permissions-user" : undefined
+                              }
                               checked={selected}
                               onChange={() => {
                                 if (selected) {
@@ -684,113 +1357,59 @@ export default function AgentWizardPage() {
                         );
                       })}
                     </div>
+                      </>
+                    )}
                   </div>
                 )}
 
-                {stepIndex === "بازبینی" && (
+                {stepIndex === "تست و انتشار" && (
                   <div className="space-y-4 text-sm">
-                    <dl className="grid gap-2 sm:grid-cols-2">
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">نام</dt>
-                        <dd className="font-semibold text-stone-900">{form.name || "—"}</dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">نوع ایجنت</dt>
-                        <dd className="font-semibold text-stone-900">{KIND_LABELS[kind]}</dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2 sm:col-span-2">
-                        <dt className="text-xs text-stone-500">توانایی‌های فعال</dt>
-                        <dd className="font-medium text-stone-800">
-                          {capBadges.map((b) => b.label).join(" · ")}
-                        </dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">دکمه‌های عملیاتی</dt>
-                        <dd className="font-semibold text-stone-900">{actions.length || "ندارد"}</dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">میانبر گفت‌وگو</dt>
-                        <dd className="font-semibold text-stone-900">{templates.length || "ندارد"}</dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">قابلیت‌های سیستم</dt>
-                        <dd className="font-semibold text-stone-900">
-                          {form.tool_names.length || "ندارد"}
-                        </dd>
-                      </div>
-                      <div className="rounded-xl bg-stone-50/80 px-3 py-2">
-                        <dt className="text-xs text-stone-500">اتصال ایجنت دیگر</dt>
-                        <dd className="font-semibold text-stone-900">{links.length || "ندارد"}</dd>
-                      </div>
-                    </dl>
-                    {needsApiStep && (
-                      <p className="text-stone-600">
-                        <strong>سرویس API:</strong> {apiSelectionCount} مورد انتخاب شده
-                      </p>
+                    {bootstrapping ? (
+                      <WizardBootstrapLoading stageId={bootstrapStage} />
+                    ) : activeAgent ? (
+                      <WizardPostPublishPanel
+                        agent={activeAgent}
+                        stepLabel={suggestPostPublishStep(activeAgent)}
+                        onAgentRefresh={refreshPublishedAgent}
+                      />
+                    ) : (
+                      <p className="py-8 text-center text-stone-500">در حال بارگذاری…</p>
                     )}
-                    <div className="rounded-2xl border border-brand-100 bg-brand-50/50 p-4">
-                      <p className="text-xs font-semibold text-stone-500">برآورد مصرف (نسبی)</p>
-                      <p className="mt-1 text-sm text-stone-700">
-                        ایجنت‌های پیچیده‌تر (سرپرست، API، چند ابزار) معمولاً هزینه بیشتری دارند.
-                        ضریب فعلی: <strong>×{costMult.toFixed(1)}</strong>
-                      </p>
-                    </div>
                   </div>
                 )}
               </div>
             </PanelTransition>
 
             <div className="flex justify-between pt-4">
-              <Button variant="secondary" disabled={step === 0} onClick={prevStep}>
+              <Button
+                variant="secondary"
+                disabled={step === 0}
+                data-ma-support="wizard-prev"
+                onClick={prevStep}
+              >
                 گام قبل
               </Button>
               {step < visibleSteps.length - 1 ? (
-                <Button onClick={nextStep}>گام بعد</Button>
-              ) : (
-                <Button onClick={publish} disabled={saving || !form.name || nameConflict || nameCheck.checking}>
-                  {saving ? "در حال انتشار…" : "انتشار"}
+                <Button
+                  data-ma-support="wizard-next"
+                  onClick={() => void nextStep()}
+                  disabled={
+                    bootstrapping ||
+                    saving ||
+                    (step === permissionsStepIdx &&
+                      (!form.name || nameConflict || nameCheck.checking))
+                  }
+                >
+                  {bootstrapping
+                    ? "در حال آماده‌سازی…"
+                    : step === permissionsStepIdx
+                      ? "شروع تست"
+                      : "گام بعد"}
                 </Button>
-              )}
+              ) : null}
             </div>
           </CardBody>
         </Card>
-      </div>
-
-      <Card className="h-fit">
-        <CardHeader>
-          <h3 className="font-bold">پیش‌نمایش زنده</h3>
-        </CardHeader>
-        <CardBody className="space-y-3">
-          <div className="flex flex-wrap gap-1">
-            {capBadges.map((b) => (
-              <Badge key={b.id} variant="muted">
-                {b.label}
-              </Badge>
-            ))}
-          </div>
-          <Badge>{statusLabel("draft")}</Badge>
-          <h4 className="text-lg font-bold">{form.name || "ایجنت جدید"}</h4>
-          <p className="text-sm text-stone-500">
-            {deptLabel(form.department)} · {template}
-          </p>
-          {capabilities.actions_enabled && actions.length > 0 && (
-            <p className="text-xs text-stone-500">
-              {actions.length} اقدام عملیاتی
-            </p>
-          )}
-          {capabilities.file_upload_enabled && (
-            <p className="text-xs text-brand-700">
-              فایل: {filePolicy.min_files}–{filePolicy.max_files} · {filePolicy.max_file_size_mb}MB
-            </p>
-          )}
-          {!capabilities.chat_enabled && (
-            <p className="text-xs text-stone-400">گفت‌وگو غیرفعال — رابط اختصاصی</p>
-          )}
-          {needsApiStep && apiSelectionCount > 0 && (
-            <p className="text-xs text-brand-700">{apiSelectionCount} اتصال API</p>
-          )}
-        </CardBody>
-      </Card>
     </div>
   );
 }

@@ -2,45 +2,54 @@
 
 import { Upload, X } from "lucide-react";
 import { appAlert } from "@/lib/app-dialog";
+import {
+  asOutputSampleFile,
+  displayAgentFileName,
+  isOutputSampleFileName,
+  isRuntimeSampleFileName,
+} from "@/lib/agent-file-roles";
+import {
+  validateFileAgainstPolicy,
+  filePolicyAcceptAttr,
+  filePolicyTypeHint,
+} from "@/lib/file-policy-utils";
 import type { AgentFilePolicy } from "@/types";
 
 type Props = {
   files: File[];
   onChange: (files: File[]) => void;
   filePolicy: AgentFilePolicy;
-  /** When true, copy explains files are optional format examples. */
+  mode?: "input" | "output" | "legacy";
   optional?: boolean;
   title?: string;
   description?: string;
 };
 
-function validateFile(file: File, policy: AgentFilePolicy): string | null {
-  const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
-  const mimeOk = policy.allowed_mime_types.includes(file.type);
-  const extOk = policy.allowed_extensions.some(
-    (e) => e.toLowerCase() === ext || e.toLowerCase() === ext.replace(/^\./, "")
-  );
-  if (!mimeOk && !extOk) return `نوع فایل «${file.name}» مجاز نیست`;
-  const mb = file.size / (1024 * 1024);
-  if (mb > policy.max_file_size_mb) {
-    return `حجم «${file.name}» بیش از ${policy.max_file_size_mb}MB است`;
-  }
-  return null;
+export function validateStagedFile(file: File, policy: AgentFilePolicy): string | null {
+  return validateFileAgainstPolicy(file, policy);
 }
 
 export function WizardStagedFiles({
   files,
   onChange,
   filePolicy,
+  mode = "legacy",
   optional = true,
   title,
   description,
 }: Props) {
+  const visibleFiles =
+    mode === "output"
+      ? files.filter((f) => isOutputSampleFileName(f.name))
+      : mode === "input"
+        ? files.filter((f) => isRuntimeSampleFileName(f.name))
+        : files.filter((f) => isRuntimeSampleFileName(f.name));
+
   function addFiles(fileList: FileList | null) {
     if (!fileList?.length) return;
     const next = [...files];
     for (const file of Array.from(fileList)) {
-      const err = validateFile(file, filePolicy);
+      const err = validateFileAgainstPolicy(file, filePolicy);
       if (err) {
         void appAlert({ title: "فایل نامعتبر", message: err, tone: "danger" });
         continue;
@@ -52,29 +61,49 @@ export function WizardStagedFiles({
         });
         break;
       }
-      if (next.some((f) => f.name === file.name && f.size === file.size)) continue;
-      next.push(file);
+      const normalized =
+        mode === "output" ? asOutputSampleFile(file) : file;
+      if (
+        next.some((f) => f.name === normalized.name && f.size === normalized.size)
+      )
+        continue;
+      next.push(normalized);
     }
     onChange(next);
   }
 
   function removeAt(index: number) {
-    onChange(files.filter((_, i) => i !== index));
+    const target = visibleFiles[index];
+    if (!target) return;
+    onChange(files.filter((f) => f !== target));
   }
 
-  const hint = `${filePolicy.allowed_extensions.join("، ")} · حداکثر ${filePolicy.max_file_size_mb}MB`;
+  const defaultTitle =
+    mode === "input"
+      ? "فایل ورودی نمونه"
+      : mode === "output"
+        ? "فایل خروجی نمونه (مورد انتظار)"
+        : optional
+          ? "فایل نمونه برای قالب خروجی (اختیاری)"
+          : "فایل نمونه";
+
+  const defaultDescription =
+    mode === "input"
+      ? "فایل خام یا ورودی واقعی که کاربر آپلود می‌کند (مثلاً اکسل کارکرد)."
+      : mode === "output"
+        ? "نمونه خروجی مورد انتظار — مثلاً فایل پردازش‌شده خانم فاطمی."
+        : optional
+          ? "اگر ایجنت باید فرمت خاصی را دنبال کند، یک فایل نمونه بگذارید."
+          : "فایل نمونه بعد از انتشار به ایجنت پیوست می‌شود.";
+
+  const hint = `${filePolicyTypeHint(filePolicy)} · حداکثر ${filePolicy.max_file_size_mb}MB`;
 
   return (
     <div className="space-y-3 rounded-xl border border-stone-200 bg-stone-50/50 p-4">
       <div>
-        <p className="text-sm font-semibold text-stone-800">
-          {title ?? (optional ? "فایل نمونه برای قالب خروجی (اختیاری)" : "فایل نمونه")}
-        </p>
+        <p className="text-sm font-semibold text-stone-800">{title ?? defaultTitle}</p>
         <p className="mt-1 text-xs leading-relaxed text-stone-500">
-          {description ??
-            (optional
-              ? "اگر ایجنت باید فرمت خاصی (مثلاً اکسل کارکرد) را دنبال کند، یک فایل نمونه بگذارید. بدون فایل هم می‌توانید ادامه دهید."
-              : "فایل نمونه بعد از انتشار به ایجنت پیوست می‌شود تا در اجرا از همان قالب استفاده کند.")}
+          {description ?? defaultDescription}
         </p>
         <p className="mt-1 text-xs text-stone-400">{hint}</p>
       </div>
@@ -84,12 +113,12 @@ export function WizardStagedFiles({
           <Upload className="h-4 w-4 text-brand-600" />
           انتخاب فایل
         </div>
-        <span className="text-xs text-stone-400">{files.length} فایل</span>
+        <span className="text-xs text-stone-400">{visibleFiles.length} فایل</span>
         <input
           type="file"
           multiple
           className="hidden"
-          accept={filePolicy.allowed_extensions.join(",")}
+          accept={filePolicyAcceptAttr(filePolicy)}
           onChange={(e) => {
             addFiles(e.target.files);
             e.target.value = "";
@@ -97,14 +126,16 @@ export function WizardStagedFiles({
         />
       </label>
 
-      {files.length > 0 && (
+      {visibleFiles.length > 0 && (
         <ul className="space-y-2">
-          {files.map((f, i) => (
+          {visibleFiles.map((f, i) => (
             <li
               key={`${f.name}-${f.size}-${i}`}
               className="flex items-center justify-between rounded-lg border border-stone-100 bg-white px-3 py-2 text-xs"
             >
-              <span className="truncate font-medium text-stone-700">{f.name}</span>
+              <span className="truncate font-medium text-stone-700">
+                {displayAgentFileName(f.name)}
+              </span>
               <div className="flex shrink-0 items-center gap-2">
                 <span className="text-stone-400">{Math.round(f.size / 1024)}KB</span>
                 <button
