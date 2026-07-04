@@ -7,6 +7,7 @@ locally and format Persian user-facing answers from structured tool output.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -72,9 +73,15 @@ def extract_tool_context(user_input: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
 
-    path_match = re.search(r"storage_path=(\S+)", user_input)
-    if path_match and "storage_path" not in ctx:
-        ctx["storage_path"] = path_match.group(1).rstrip(".,;")
+    for pattern in (
+        r'storage_path="([^"]+)"',
+        r"storage_path='([^']+)'",
+        r"storage_path=(\S+)",
+    ):
+        path_match = re.search(pattern, user_input)
+        if path_match and "storage_path" not in ctx:
+            ctx["storage_path"] = path_match.group(1).rstrip(".,;")
+            break
 
     agent_match = re.search(r'agent_id="([^"]+)"', user_input)
     if agent_match and "agent_id" not in ctx:
@@ -102,6 +109,31 @@ _TOOL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "budget_lookup": ("بودجه", "budget", "هزینه"),
     "crm_lookup": ("crm", "مشتری", "customer", "تیکت"),
 }
+
+
+_STOPWORDS = frozenset(
+    {"the", "and", "for", "with", "from", "this", "that", "tool", "use", "used",
+     "run", "data", "file", "files", "input", "output", "based", "given", "into",
+     "your", "you", "are", "via", "lookup", "process", "generate"}
+)
+
+
+def _keyword_hints(name: str) -> tuple[str, ...]:
+    """Keywords for a tool: static map first, else derived from name/description.
+
+    Lets brand-new tools be selectable on the cursor fallback path without
+    editing _TOOL_KEYWORDS — native FC handles selection on the primary path.
+    """
+    static = _TOOL_KEYWORDS.get(name)
+    if static:
+        return static
+    tokens: set[str] = set(re.split(r"[_\s]+", name.lower()))
+    try:
+        desc = (ToolRegistry.get(name).description or "").lower()
+    except KeyError:
+        desc = ""
+    tokens.update(re.findall(r"[a-zA-Z\u0600-\u06FF]{3,}", desc))
+    return tuple(t for t in tokens if t and t not in _STOPWORDS)
 
 
 def select_tools_for_request(user_input: str, tool_names: list[str]) -> list[str]:
@@ -135,7 +167,7 @@ def select_tools_for_request(user_input: str, tool_names: list[str]) -> list[str
 
     scores: dict[str, int] = {}
     for name in tool_names:
-        for kw in _TOOL_KEYWORDS.get(name, ()):
+        for kw in _keyword_hints(name):
             if kw in lower:
                 scores[name] = scores.get(name, 0) + 1
 
@@ -206,10 +238,10 @@ def build_tool_args(tool: BaseTool, tool_name: str, ctx: dict[str, Any], user_in
     return out
 
 
-async def _invoke_tool(tool: BaseTool, args: dict[str, Any]) -> Any:
-    if hasattr(tool, "ainvoke"):
-        return await tool.ainvoke(args)
-    return tool.invoke(args)
+async def _invoke_tool(tool_name: str, args: dict[str, Any]) -> Any:
+    from src.demo.tool_runner import run_tool_slug
+
+    return await asyncio.to_thread(run_tool_slug, tool_name, args)
 
 
 def format_tool_output(tool_name: str, result: Any, *, validation: bool) -> str:
@@ -244,9 +276,21 @@ def format_tool_output(tool_name: str, result: Any, *, validation: bool) -> str:
             lines.extend(["", str(result["next_step"])])
         return "\n".join(lines)
 
+    if tool_name.startswith("platform_") or tool_name == "crm_lookup":
+        from src.agents_lib.platform_support_grounding import format_platform_tool_result
+
+        payload = dict(result)
+        payload["_tool"] = tool_name
+        grounded = format_platform_tool_result(payload)
+        if grounded:
+            return grounded
+
     summary = result.get("summary")
     download = result.get("download_path")
+    message = result.get("message")
     parts: list[str] = []
+    if message:
+        parts.append(str(message))
     if summary:
         parts.append(str(summary))
     if download:
@@ -307,6 +351,8 @@ async def run_cursor_tools_agent(
     for name in selected:
         tool = ToolRegistry.get(name)
         args = build_tool_args(tool, name, ctx, user_input)
+        if ctx.get("agent_id") and "agent_id" not in args:
+            args["agent_id"] = str(ctx["agent_id"])
         trace.append(
             trace_step(
                 "tool_call",
@@ -316,7 +362,7 @@ async def run_cursor_tools_agent(
             )
         )
         try:
-            result = await _invoke_tool(tool, args)
+            result = await _invoke_tool(name, args)
         except Exception as exc:  # noqa: BLE001
             trace.append(
                 trace_step(

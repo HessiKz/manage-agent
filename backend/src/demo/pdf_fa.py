@@ -12,9 +12,12 @@ try:  # optional, but installed in this project
 except ImportError:  # pragma: no cover
     _HAS_SHAPING = False
 
-# DejaVu first: it covers Latin + digits + symbols + Arabic presentation forms
-# (so mixed content like "E-1001" / "1404/12" / "(۷٪)" renders without gaps).
+# Bundled fonts ship in the Docker image (offline VPS has no system font packages).
+_BUNDLED_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts"
+
+# DejaVu covers Latin + digits + Arabic presentation forms for mixed Persian reports.
 _FONT_CANDIDATES = (
+    (str(_BUNDLED_DIR / "DejaVuSans.ttf"), str(_BUNDLED_DIR / "DejaVuSans-Bold.ttf")),
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
     ("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",

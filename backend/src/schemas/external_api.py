@@ -68,4 +68,5 @@ class ExternalApiTestRequest(BaseModel):
 class KnowledgeIngestRequest(BaseModel):
     content: str = Field(..., min_length=10)
     agent_id: UUID | None = None
+    dataset_id: UUID | None = None
     source: str = "manual"

@@ -26,31 +26,20 @@ log = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup / shutdown hooks."""
-    log.info("app.startup", env=settings.app_env, debug=settings.app_debug)
+    """Startup / shutdown hooks — /health must respond before deferred init finishes."""
+    import asyncio
+    from contextlib import suppress
+
+    from src.core.app_startup import schedule_deferred_startup
     from src.core.storage_dirs import ensure_storage_dirs
 
+    log.info("app.startup", env=settings.app_env, debug=settings.app_debug)
     ensure_storage_dirs()
-    try:
-        from src.database.session import async_session_maker
-        from src.agents_lib.dynamic_tools import DynamicToolLoader
-
-        async with async_session_maker() as db:
-            n = await DynamicToolLoader.register_all(db)
-            log.info("tools.registered", count=n)
-    except Exception as exc:
-        log.warning("tools.register_failed", error=str(exc))
-
-    try:
-        from src.database.session import async_session_maker
-        from src.services.platform_settings_service import PlatformSettingsService
-
-        async with async_session_maker() as db:
-            state = await PlatformSettingsService(db).load_llm_provider_into_cache()
-            log.info("llm_provider.loaded", active=state.get("active"))
-    except Exception as exc:
-        log.warning("llm_provider.load_failed", error=str(exc))
+    deferred = schedule_deferred_startup()
     yield
+    deferred.cancel()
+    with suppress(asyncio.CancelledError):
+        await deferred
     log.info("app.shutdown")
 
 
@@ -85,8 +74,19 @@ def create_app() -> FastAPI:
             r"|\[::1\]"
             r")(:\d+)?"
         )
+        extras = settings.cors_origins_list
+        if extras:
+            cors_kwargs["allow_origins"] = extras
     else:
-        cors_kwargs["allow_origins"] = settings.cors_origins_list
+        origins = list(settings.cors_origins_list)
+        cors_kwargs["allow_origins"] = origins
+        regex_parts: list[str] = []
+        if settings.cors_allow_vercel_previews:
+            regex_parts.append(r"https://([a-z0-9-]+\.)*vercel\.app")
+        if settings.cors_allow_railway_domains:
+            regex_parts.append(r"https://([a-z0-9-]+\.)*up\.railway\.app")
+        if regex_parts:
+            cors_kwargs["allow_origin_regex"] = "|".join(regex_parts)
 
     app.add_middleware(CORSMiddleware, **cors_kwargs)
 

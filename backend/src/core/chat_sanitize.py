@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 # :::writing / :::reply fenced blocks (Cursor-style and similar)
@@ -85,6 +86,55 @@ def _extract_fenced_content(text: str) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
+_PLATFORM_JSON_BLOCK = re.compile(
+    r"\{[^{}]*(?:\"ui_script\"|\"ui_action\"|\"append_json\")[^{}]*\}",
+    re.DOTALL,
+)
+_HIGHLIGHT_JSON = re.compile(r'\{\s*"highlight"\s*:\s*"[^"]*"\s*\}')
+_UI_PROGRESS_LINE = re.compile(
+    r"^الان «.+» را از طریق رابط کاربری انجام می‌دهم\.?\s*$",
+    re.MULTILINE,
+)
+_UI_OPENING_LINE = re.compile(
+    r"^در حال باز کردن فهرست.*$",
+    re.MULTILINE,
+)
+
+
+def humanize_platform_tool_output(text: str) -> str:
+    """Turn raw platform tool JSON into a short Persian status line."""
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    if len(raw) > 80 and not raw.startswith("{"):
+        cleaned = _HIGHLIGHT_JSON.sub("", raw)
+        cleaned = _PLATFORM_JSON_BLOCK.sub("", cleaned)
+        cleaned = _UI_PROGRESS_LINE.sub("", cleaned)
+        cleaned = _UI_OPENING_LINE.sub("", cleaned)
+        return _collapse_blank_lines(cleaned) or raw
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            msg = data.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+            script = data.get("ui_script")
+            if isinstance(script, dict):
+                label = script.get("label")
+                if isinstance(label, str) and label.strip():
+                    return f"الان «{label.strip()}» را از طریق رابط کاربری انجام می‌دهم."
+            if data.get("success"):
+                return "در حال انجام درخواست شما از طریق رابط کاربری…"
+    cleaned = _HIGHLIGHT_JSON.sub("", raw)
+    cleaned = _PLATFORM_JSON_BLOCK.sub("", cleaned).strip()
+    cleaned = _UI_PROGRESS_LINE.sub("", cleaned)
+    cleaned = _UI_OPENING_LINE.sub("", cleaned)
+    return _collapse_blank_lines(cleaned) or raw
+
+
 def sanitize_chat_output(text: str) -> str:
     """
     Return user-facing assistant text: extract :::writing-style blocks,
@@ -104,6 +154,8 @@ def sanitize_chat_output(text: str) -> str:
 
     cleaned = _strip_meta_wrappers(cleaned)
     cleaned = _ORPHAN_FENCE_LINE.sub("", cleaned)
+    cleaned = humanize_platform_tool_output(cleaned)
+    cleaned = _PLATFORM_JSON_BLOCK.sub("", cleaned)
     result = _collapse_blank_lines(cleaned)
     if result:
         return result

@@ -33,6 +33,7 @@ STATUS_MESSAGE_FA: dict[int, str] = {
     409: "تداخل داده — این مورد از قبل وجود دارد.",
     422: "ورودی ارسالی معتبر نیست.",
     429: "تعداد درخواست‌ها بیش از حد مجاز است. کمی صبر کنید.",
+    405: "این درخواست با این روش مجاز نیست.",
     500: "خطای داخلی سرور. لطفاً دوباره تلاش کنید.",
     503: "سرویس موقتاً در دسترس نیست.",
 }
@@ -46,6 +47,7 @@ STATUS_TO_CODE: dict[int, ErrorCode] = {
     409: ErrorCode.CONFLICT,
     422: ErrorCode.VALIDATION_ERROR,
     429: ErrorCode.RATE_LIMITED,
+    405: ErrorCode.BAD_REQUEST,
     500: ErrorCode.INTERNAL_ERROR,
     503: ErrorCode.SERVICE_UNAVAILABLE,
 }

@@ -10,10 +10,17 @@ from src.karkard.output import KARKARD_OUTPUT_DIR
 
 router = APIRouter()
 
+# LLM/markdown often wraps paths in backticks — strip so downloads still resolve.
+_FILENAME_TRIM = " \t\r\n`\"'<>[]()"
+
+
+def _sanitize_filename(filename: str) -> str:
+    return Path(filename).name.strip(_FILENAME_TRIM)
+
 
 @router.get("/demo-files/reports/{filename}")
 async def download_demo_report(filename: str):
-    safe = Path(filename).name
+    safe = _sanitize_filename(filename)
     path = REPORTS_DIR / safe
     if not path.is_file():
         txt = REPORTS_DIR / f"{Path(safe).stem}.txt"
@@ -38,7 +45,7 @@ def _resolve_karkard_file(safe: str) -> Path | None:
 
 @router.get("/demo-files/karkard/{filename}")
 async def download_karkard_output(filename: str):
-    safe = Path(filename).name
+    safe = _sanitize_filename(filename)
     path = _resolve_karkard_file(safe)
     if not path:
         raise HTTPException(status_code=404, detail="Karkard output not found")

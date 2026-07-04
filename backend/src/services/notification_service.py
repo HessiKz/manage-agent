@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.conversation_preview import plain_text_preview
 from src.models.notification import Notification, NotificationSeverity
 
 
@@ -22,7 +23,10 @@ class NotificationService:
             stmt = stmt.where(Notification.is_read.is_(False))
         stmt = stmt.order_by(Notification.created_at.desc()).limit(limit)
         result = await self.db.execute(stmt)
-        return list(result.scalars().all())
+        items = list(result.scalars().all())
+        for n in items:
+            n.message = plain_text_preview(n.message, max_len=300) or n.message
+        return items
 
     async def unread_count(self, user_id: UUID) -> int:
         stmt = select(func.count(Notification.id)).where(
@@ -41,10 +45,11 @@ class NotificationService:
         link: str | None = None,
         meta: dict | None = None,
     ) -> Notification:
+        clean_message = plain_text_preview(message, max_len=300) or message.strip()
         n = Notification(
             user_id=user_id,
             title=title,
-            message=message,
+            message=clean_message,
             severity=severity,
             link=link,
             meta=meta or {},

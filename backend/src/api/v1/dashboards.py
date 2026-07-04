@@ -8,6 +8,9 @@ from sqlalchemy import func, select
 
 from src.api.dependencies import DB, CurrentUser
 from src.core.catalog import CATALOG_SLUGS
+from src.demo.agent_dashboards import resolve_profile_key
+from src.demo.agent_hr_benchmarks import aggregate_platform_hr_savings, compute_hr_savings
+from src.repositories.activity_repo import ActivityRepository
 from src.models.activity_log import ActivityLog, ActivityStatus
 from src.models.agent import Agent, AgentKind, AgentStatus
 from src.models.agent_permission import AgentUserPermission
@@ -46,7 +49,8 @@ async def overview(db: DB, _user: CurrentUser):
     departments = (
         await db.execute(
             select(func.count(func.distinct(Agent.department))).where(
-                catalog, Agent.department.isnot(None)
+                Agent.department.isnot(None),
+                Agent.status == AgentStatus.ACTIVE,
             )
         )
     ).scalar_one()
@@ -71,8 +75,22 @@ async def overview(db: DB, _user: CurrentUser):
     }
 
 
+@router.get("/hr-savings")
+async def platform_hr_savings(db: DB, _user: CurrentUser):
+    """Aggregated HR savings vs equivalent employee cost across catalog agents."""
+    stmt = select(Agent).where(Agent.slug.in_(CATALOG_SLUGS), Agent.status == AgentStatus.ACTIVE)
+    agents = list((await db.execute(stmt)).scalars().all())
+    activity = ActivityRepository(db)
+    per_agent: list[dict] = []
+    for agent in agents:
+        stats = await activity.stats_for_agent(agent.id)
+        profile_key = resolve_profile_key(agent)
+        per_agent.append(compute_hr_savings(profile_key, stats))
+    return aggregate_platform_hr_savings(per_agent)
+
+
 @router.get("/top-agents")
-async def top_agents(db: DB, _user: CurrentUser, limit: int = 10):
+async def top_agents(db: DB, _user: CurrentUser, limit: int = Query(10, ge=1, le=50)):
     """Top agents by run count (Page 4 widget)."""
     stmt = (
         select(
@@ -80,12 +98,25 @@ async def top_agents(db: DB, _user: CurrentUser, limit: int = 10):
             Agent.name,
             Agent.slug,
             Agent.department,
+            Agent.description,
+            Agent.created_at,
             func.count(ActivityLog.id).label("runs"),
         )
         .join(ActivityLog, ActivityLog.agent_id == Agent.id, isouter=True)
-        .where(Agent.slug.in_(CATALOG_SLUGS))
-        .group_by(Agent.id)
-        .order_by(func.count(ActivityLog.id).desc())
+        .where(
+            Agent.slug.in_(CATALOG_SLUGS),
+            Agent.status == AgentStatus.ACTIVE,
+            Agent.slug != "support",
+        )
+        .group_by(
+            Agent.id,
+            Agent.name,
+            Agent.slug,
+            Agent.department,
+            Agent.description,
+            Agent.created_at,
+        )
+        .order_by(func.count(ActivityLog.id).desc(), Agent.created_at.desc())
         .limit(limit)
     )
     result = await db.execute(stmt)
@@ -95,6 +126,8 @@ async def top_agents(db: DB, _user: CurrentUser, limit: int = 10):
             "name": row.name,
             "slug": row.slug,
             "department": row.department,
+            "description": row.description,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
             "runs": row.runs,
         }
         for row in result.all()
@@ -102,15 +135,20 @@ async def top_agents(db: DB, _user: CurrentUser, limit: int = 10):
 
 
 @router.get("/usage")
-async def usage_chart(db: DB, _user: CurrentUser, days: int = Query(30, ge=7, le=90)):
-    """Daily run counts for chart (Page 4)."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    day_col = func.date_trunc("day", ActivityLog.started_at).label("day")
+async def usage_chart(db: DB, _user: CurrentUser, days: int = Query(30, ge=1, le=90)):
+    """Run counts for charts — hourly buckets for 24h, daily for 7–90 days."""
+    now = datetime.now(timezone.utc)
+    if days == 1:
+        since = now - timedelta(hours=24)
+        bucket_col = func.date_trunc("hour", ActivityLog.started_at).label("day")
+    else:
+        since = now - timedelta(days=days)
+        bucket_col = func.date_trunc("day", ActivityLog.started_at).label("day")
     stmt = (
-        select(day_col, func.count(ActivityLog.id).label("runs"))
+        select(bucket_col, func.count(ActivityLog.id).label("runs"))
         .where(ActivityLog.started_at >= since)
-        .group_by(day_col)
-        .order_by(day_col)
+        .group_by(bucket_col)
+        .order_by(bucket_col)
     )
     result = await db.execute(stmt)
     return [{"day": row.day.isoformat() if row.day else None, "runs": row.runs} for row in result.all()]
@@ -170,10 +208,13 @@ async def platform_events(db: DB, _user: CurrentUser, limit: int = Query(20, ge=
 
 @router.get("/departments")
 async def department_counts(db: DB, _user: CurrentUser):
-    """Agent count per department (Page 2 sidebar)."""
+    """Agent count per department (sidebar) — all active agents, not catalog-only."""
     stmt = (
         select(Agent.department, func.count(Agent.id).label("count"))
-        .where(Agent.slug.in_(CATALOG_SLUGS), Agent.department.isnot(None))
+        .where(
+            Agent.department.isnot(None),
+            Agent.status == AgentStatus.ACTIVE,
+        )
         .group_by(Agent.department)
         .order_by(func.count(Agent.id).desc())
     )
@@ -195,8 +236,12 @@ async def sidebar_counts(db: DB, user: CurrentUser):
 
     my_conversations = (
         await db.execute(
-            select(func.count(ActivityLog.id)).where(
-                ActivityLog.user_id == user.id, ActivityLog.action == "invoke"
+            select(func.count(ActivityLog.id))
+            .join(Agent, Agent.id == ActivityLog.agent_id)
+            .where(
+                ActivityLog.user_id == user.id,
+                ActivityLog.action == "invoke",
+                Agent.slug != "support",
             )
         )
     ).scalar_one()

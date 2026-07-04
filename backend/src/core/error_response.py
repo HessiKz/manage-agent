@@ -24,12 +24,12 @@ def user_message(
     prefer_detail: bool = True,
 ) -> str:
     """Pick Persian message: use detail if it looks user-facing, else status default."""
-    if detail and prefer_detail and _looks_user_facing(detail):
+    if detail and prefer_detail and looks_user_facing(detail):
         return detail
     return STATUS_MESSAGE_FA.get(status_code, STATUS_MESSAGE_FA[500])
 
 
-def _looks_user_facing(text: str) -> bool:
+def looks_user_facing(text: str) -> bool:
     """Heuristic: Persian text or known LLM messages are shown to users."""
     if any("\u0600" <= c <= "\u06FF" for c in text):
         return True

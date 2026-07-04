@@ -51,11 +51,8 @@ export function ExternalApiPicker({ value, onChange }: Props) {
   if (!activeServices.length) {
     return (
       <div className="rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-6 text-center text-sm text-stone-600">
-        هنوز سرویس API فعالی نیست. از{" "}
-        <a href="/integrations" className="font-semibold text-brand-700 underline">
-          یکپارچه‌سازی‌ها
-        </a>{" "}
-        یک سرویس اضافه کنید.
+        هنوز سرویس API فعالی نیست. در بخش «مدیریت سرویس‌های API» بالا یک سرویس و اندپوینت اضافه
+        کنید.
       </div>
     );
   }

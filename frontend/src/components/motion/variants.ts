@@ -180,6 +180,30 @@ export function getFadePanelVariants(reduced: boolean): Variants {
   };
 }
 
+/** Workspace ↔ admin shell swap (RTL-aware horizontal drift). */
+export function getViewModeNavVariants(
+  reduced: boolean,
+  direction: "to-admin" | "to-workspace"
+): Variants {
+  if (reduced) {
+    return {
+      initial: { opacity: 1 },
+      animate: { opacity: 1 },
+      exit: { opacity: 1 },
+    };
+  }
+  const enterX = direction === "to-admin" ? 28 : -28;
+  const exitX = direction === "to-admin" ? -20 : 20;
+  return {
+    initial: { opacity: 0, x: enterX },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: exitX },
+  };
+}
+
+export const viewModeNavTransition: Transition = { duration: 0.22, ease: easeOut };
+export const viewModeSweepTransition: Transition = { duration: 0.42, ease: easeOut };
+
 export const itemTransition: Transition = { duration: 0.16, ease: easeOut };
 export const pageTransition: Transition = { duration: 0.18, ease: easeOut };
 export const panelTransition: Transition = { duration: 0.16, ease: easeOut };

@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { fetchMe, login } from "@/lib/api";
+import { getValidAccessToken } from "@/lib/auth-token";
 import { getErrorMessage } from "@/lib/errors";
 import { useAuthStore } from "@/stores/auth-store";
 import { SharedLogo, setBrandMorphPending } from "@/components/motion/shared";
 import { MotionReveal, Stagger, StaggerItem } from "@/components/motion/stagger";
+import { ClientMonthYear } from "@/components/ui/client-date";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -20,8 +22,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!localStorage.getItem("access_token")) return;
-    router.replace("/dashboard");
+    void getValidAccessToken().then((token) => {
+      if (token) router.replace("/dashboard");
+    });
   }, [router]);
 
   async function finishLogin() {
@@ -83,7 +86,9 @@ export default function LoginPage() {
             </StaggerItem>
 
             <StaggerItem variant="fadeIn">
-              <p className="mb-2 text-sm text-brand-400">نسخه ۲٫۱ · بهمن ۱۴۰۲</p>
+              <p className="mb-2 text-sm text-brand-400">
+                نسخه ۲٫۱ · <ClientMonthYear />
+              </p>
             </StaggerItem>
             <StaggerItem variant="slideRight">
               <h1 className="text-4xl font-extrabold leading-tight text-brand-400">
@@ -245,6 +250,16 @@ export default function LoginPage() {
                   می‌کنید.
                 </p>
               </StaggerItem>
+              {process.env.NODE_ENV === "development" && (
+                <StaggerItem variant="fadeIn">
+                  <p className="rounded-xl bg-stone-50 px-3 py-2 text-center text-[11px] leading-relaxed text-stone-500">
+                    حساب پیش‌فرض توسعه:{" "}
+                    <span className="font-mono text-stone-700">admin@example.com</span>
+                    {" / "}
+                    <span className="font-mono text-stone-700">admin123</span>
+                  </p>
+                </StaggerItem>
+              )}
             </Stagger>
           </form>
         </MotionReveal>

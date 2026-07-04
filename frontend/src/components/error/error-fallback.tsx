@@ -4,6 +4,7 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { parseApiError } from "@/lib/errors";
 
 type Props = {
   error: Error;
@@ -12,6 +13,12 @@ type Props = {
 };
 
 export function ErrorFallback({ error, onRetry, segment }: Props) {
+  const apiErr = parseApiError(error);
+  const detail =
+    apiErr.requestId != null
+      ? `${apiErr.message}\nشناسه درخواست: ${apiErr.requestId}`
+      : apiErr.message;
+
   return (
     <div className="flex min-h-[50vh] items-center justify-center p-6">
       <Card className="max-w-lg w-full">
@@ -24,7 +31,7 @@ export function ErrorFallback({ error, onRetry, segment }: Props) {
             {segment && (
               <p className="mt-1 text-xs text-stone-400">بخش: {segment}</p>
             )}
-            <p className="mt-2 text-sm text-stone-600">{error.message}</p>
+            <p className="mt-2 whitespace-pre-wrap text-sm text-stone-600">{detail}</p>
           </div>
           <div className="flex flex-wrap justify-center gap-2">
             {onRetry && (

@@ -18,6 +18,8 @@ export type User = {
   locale: string;
   department?: string;
   title?: string;
+  phone?: string;
+  address?: string;
   avatar_url?: string;
   is_active: boolean;
   is_superuser: boolean;
@@ -47,6 +49,24 @@ export type AgentApiBindings = {
   endpoint_ids: string[];
 };
 
+export type AgentKnowledgeBindings = {
+  dataset_ids: string[];
+};
+
+export type KnowledgeDataset = {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  department?: string | null;
+  source_type?: string;
+  example_input?: string | null;
+  example_output?: string | null;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AgentFilePolicy = {
   min_files: number;
   max_files: number;
@@ -56,6 +76,8 @@ export type AgentFilePolicy = {
   allowed_extensions: string[];
   require_files_to_invoke: boolean;
   auto_ingest_to_rag: boolean;
+  /** When true, only size/count limits apply — any extension/MIME is accepted. */
+  allow_all_types?: boolean;
 };
 
 export type AgentLinkPolicy = {
@@ -159,10 +181,13 @@ export type TopAgent = {
   name: string;
   slug: string;
   department?: string;
+  description?: string;
+  created_at?: string | null;
   runs: number;
 };
 
 export type AgentDashboardStatCard = {
+  id?: string;
   label: string;
   value: string;
   hint?: string;
@@ -203,6 +228,14 @@ export type AgentDashboardReviewTable = {
   rows: AgentDashboardReviewRow[];
 };
 
+export type AgentExecutionTestStep = {
+  kind: string;
+  label: string;
+  description: string;
+  action_slug?: string | null;
+  prompt?: string | null;
+};
+
 export type AgentExecution = {
   profile: string;
   domain_label: string;
@@ -216,6 +249,13 @@ export type AgentExecution = {
   actions: { slug: string; label: string; description?: string }[];
   templates: { slug: string; label: string; body: string }[];
   tools: string[];
+  test_steps?: AgentExecutionTestStep[];
+  guide_source?: string;
+};
+
+export type AgentExecutionGuideStatus = {
+  state: "idle" | "generating" | "ready" | "failed";
+  source?: string | null;
 };
 
 export type AgentDashboardRunSummary = {
@@ -251,11 +291,20 @@ export type AgentDashboardHrSavings = {
   usd_to_irr_rate: number;
 };
 
+export type PlatformHrSavings = AgentDashboardHrSavings & {
+  agent_count?: number;
+};
+
 export type AgentDashboard = {
   profile: string;
   domain_label: string;
   panel_title: string;
   uses_live_runs: boolean;
+  is_custom?: boolean;
+  hide_hr_savings?: boolean;
+  has_pending_draft?: boolean;
+  is_draft_preview?: boolean;
+  draft_unavailable?: boolean;
   stat_cards: AgentDashboardStatCard[];
   line_chart?: AgentDashboardLineChart | null;
   pie_chart?: AgentDashboardPieChart | null;
@@ -443,4 +492,5 @@ export type AgentCreatePayload = Partial<Agent> & {
   templates?: AgentPromptTemplate[];
   links?: AgentLink[];
   api_bindings?: AgentApiBindings;
+  knowledge_bindings?: AgentKnowledgeBindings;
 };

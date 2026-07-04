@@ -9,6 +9,10 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.agent_training_context import (
+    TRAINING_ATTACHMENT_POLICY,
+    agent_in_interactive_training,
+)
 from src.models.agent import Agent
 from src.models.agent_file import AgentFile
 from src.schemas.agent_capabilities import AgentFilePolicy
@@ -43,21 +47,26 @@ async def validate_upload(
     size_bytes: int,
 ) -> None:
     caps = agent.capabilities or {}
-    if not caps.get("file_upload_enabled", False):
+    in_training = agent_in_interactive_training(agent)
+    if not caps.get("file_upload_enabled", False) and not in_training:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="File upload is disabled for this agent",
         )
 
-    policy = _normalize_policy(agent.file_policy)
+    if caps.get("file_upload_enabled", False):
+        policy = _normalize_policy(agent.file_policy)
+    else:
+        policy = TRAINING_ATTACHMENT_POLICY
     ext = _extension(filename)
-    mime_ok = mime_type in policy.allowed_mime_types
-    ext_ok = ext in policy.allowed_extensions
-    if not mime_ok and not ext_ok:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"File type not allowed: {mime_type} / {ext}",
-        )
+    if not policy.allow_all_types:
+        mime_ok = mime_type in policy.allowed_mime_types
+        ext_ok = ext in policy.allowed_extensions
+        if not mime_ok and not ext_ok:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"File type not allowed: {mime_type} / {ext}",
+            )
 
     max_bytes = policy.max_file_size_mb * 1024 * 1024
     if size_bytes > max_bytes:

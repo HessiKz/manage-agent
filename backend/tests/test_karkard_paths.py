@@ -26,6 +26,6 @@ def test_resolve_bare_demo_filename(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_find_processed_output(tmp_path: Path):
     raw = tmp_path / "abc_raw.xlsx"
     raw.write_bytes(b"x")
-    out = tmp_path / "karkard-abc_raw-processed.xlsx"
+    out = tmp_path / "karkard-deadbeef.xlsx"
     out.write_bytes(b"y")
     assert find_processed_output(raw) == out

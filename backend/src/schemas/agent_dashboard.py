@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AgentDashboardStatCard(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    id: str | None = None
     label: str
     value: str
     hint: str | None = None
@@ -92,6 +93,11 @@ class AgentDashboardRead(BaseModel):
     domain_label: str
     panel_title: str
     uses_live_runs: bool = False
+    is_custom: bool = False
+    hide_hr_savings: bool = False
+    has_pending_draft: bool = Field(False, serialization_alias="hasPendingDraft")
+    is_draft_preview: bool = Field(False, serialization_alias="isDraftPreview")
+    draft_unavailable: bool = Field(False, serialization_alias="draftUnavailable")
     stat_cards: list[AgentDashboardStatCard]
     line_chart: AgentDashboardLineChart | None = None
     pie_chart: AgentDashboardPieChart | None = None

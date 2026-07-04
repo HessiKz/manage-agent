@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-const DEFAULT_DATE_OPTS: Intl.DateTimeFormatOptions = {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-};
+import {
+  formatPersianDate,
+  PERSIAN_WEEKDAY_DATE_OPTS,
+  withPersianCalendar,
+} from "@/lib/persian-date";
 
 type Props = {
   options?: Intl.DateTimeFormatOptions;
@@ -14,11 +13,11 @@ type Props = {
 };
 
 /** Renders fa-IR dates only after mount to avoid SSR/client hydration mismatches. */
-export function ClientDate({ options = DEFAULT_DATE_OPTS, className }: Props) {
+export function ClientDate({ options = PERSIAN_WEEKDAY_DATE_OPTS, className }: Props) {
   const [label, setLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    setLabel(new Date().toLocaleDateString("fa-IR", options));
+    setLabel(formatPersianDate(new Date(), options));
   }, [options]);
 
   if (!label) {
@@ -36,6 +35,11 @@ export function ClientDate({ options = DEFAULT_DATE_OPTS, className }: Props) {
   );
 }
 
+/** Month + Jalali year after mount (login hero, footers). */
+export function ClientMonthYear({ className }: { className?: string }) {
+  return <ClientDate options={withPersianCalendar({ month: "long", year: "numeric" })} className={className} />;
+}
+
 /** fa-IR date+time after mount (notifications, admin events, etc.). */
 export function ClientDateTime({
   iso,
@@ -47,7 +51,13 @@ export function ClientDateTime({
   const [label, setLabel] = useState<string | null>(null);
 
   useEffect(() => {
-    setLabel(new Date(iso).toLocaleString("fa-IR"));
+    setLabel(formatPersianDate(new Date(iso), withPersianCalendar({
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })));
   }, [iso]);
 
   return (

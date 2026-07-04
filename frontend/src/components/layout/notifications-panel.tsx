@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import { easeOut } from "@/components/motion/variants";
+import { plainTextPreview } from "@/lib/plain-text-preview";
 
 export function NotificationsPanel() {
   const [open, setOpen] = useState(false);
@@ -141,7 +142,9 @@ export function NotificationsPanel() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1">
                           <p className="font-medium text-stone-800">{n.title}</p>
-                          <p className="mt-0.5 line-clamp-2 text-stone-500">{n.message}</p>
+                          <p className="mt-0.5 line-clamp-2 text-stone-500">
+                            {plainTextPreview(n.message)}
+                          </p>
                           {n.link && (
                             <Link
                               href={n.link}

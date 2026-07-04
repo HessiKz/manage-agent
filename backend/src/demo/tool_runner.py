@@ -55,8 +55,13 @@ def normalize_tool_args(tool, args: dict[str, Any]) -> dict[str, Any]:
 def run_tool_slug(slug: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     tool = ToolRegistry.get(slug)
     args = dict(variables or {})
-    if slug == "karkard_process" and args.get("agent_id"):
-        args["agent_id"] = str(args["agent_id"])
+    agent_id = args.get("agent_id")
+    if slug == "run_agent_script":
+        if not agent_id:
+            raise ValueError("agent_id is required for run_agent_script")
+        return _run_pinned_agent_script(args)
+    if slug == "karkard_process" and agent_id:
+        args["agent_id"] = str(agent_id)
     schema = tool.args_schema.model_json_schema() if tool.args_schema else {}
     props = schema.get("properties", {})
     filtered = normalize_tool_args(tool, args)
@@ -82,10 +87,48 @@ def run_tool_slug(slug: str, variables: dict[str, Any] | None = None) -> dict[st
                     "jalali_year": args.get("jalali_year"),
                 },
             )
-    result = tool.invoke(filtered)
-    if isinstance(result, dict):
-        return result
-    return {"result": result}
+
+    from src.core.agent_tool_files import run_with_file_pipeline
+
+    return run_with_file_pipeline(
+        agent_id,
+        slug,
+        tool.invoke,
+        args=filtered,
+    )
+
+
+def _run_pinned_agent_script(args: dict[str, Any]) -> dict[str, Any]:
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from src.config import settings
+    from src.core.agent_tool_files import lock_tool_storage_path
+    from src.core.agent_workspace_files import canonical_workspace_download_url
+    from src.models.agent import Agent
+    from src.services.agent_script_service import run_agent_script_file
+
+    agent_id = str(args["agent_id"])
+    storage_path = str(args.get("storage_path") or "")
+    if not storage_path:
+        raise ValueError("storage_path is required for run_agent_script")
+    locked = lock_tool_storage_path(agent_id, storage_path, tool_slug="run_agent_script")
+    engine = create_engine(str(settings.database_url).replace("+asyncpg", ""))
+    with Session(engine) as session:
+        agent = session.execute(select(Agent).where(Agent.id == agent_id)).scalar_one_or_none()
+        if not agent:
+            raise ValueError("Agent not found")
+        output = run_agent_script_file(
+            agent,
+            locked,
+            script_slug=args.get("script_slug"),
+            args=args.get("extra_args") if isinstance(args.get("extra_args"), dict) else None,
+        )
+    return {
+        "output_file": output.name,
+        "download_path": canonical_workspace_download_url(agent_id, output),
+        "summary": "فایل با اسکریپت تأییدشده ایجنت پردازش شد.",
+    }
 
 
 def format_tool_results(results: list[dict[str, Any]]) -> str:

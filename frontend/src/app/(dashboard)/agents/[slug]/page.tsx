@@ -2,12 +2,13 @@
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelTransition } from "@/components/motion/transitions";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import { AgentChatTabPanel } from "@/components/agents/agent-chat-tab-panel";
 import { AgentExecutionPanel } from "@/components/agents/agent-execution-panel";
 import { AgentOverviewPanel } from "@/components/agents/agent-overview-panel";
+import { AgentKnowledgePanel } from "@/components/agents/agent-knowledge-panel";
 import type { ChatExchange, ChatMessage } from "@/components/agents/chat-panel";
 import { KIND_LABELS } from "@/lib/agent-presets";
 import {
@@ -17,20 +18,27 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { fetchAgentActivity, fetchAgentBySlug, fetchConversation, fetchMe } from "@/lib/api";
+import { fetchAgentActivity, fetchAgentBySlug, fetchAgentExecution, fetchConversation, fetchMe } from "@/lib/api";
 import { formatAssistantOutput } from "@/lib/sanitize-chat-message";
+import { plainTextOutputPreview, plainTextUserPreview } from "@/lib/plain-text-preview";
 import { parseApiBindings } from "@/lib/agent-presets";
 import { ApiBindingsSummary } from "@/components/agents/api-bindings-summary";
+import { agentInCreationWizard } from "@/lib/agent-validation";
 import { deptLabel, statusLabel } from "@/lib/utils";
+import {
+  OVERVIEW_PANEL_URL_KEYS,
+  useUrlParams,
+} from "@/lib/url-search-params";
 
-type AgentTab = "execute" | "chat" | "overview" | "runs" | "settings";
+type AgentTab = "execute" | "chat" | "overview" | "knowledge" | "runs" | "settings";
 
 const TAB_ORDER: Record<AgentTab, number> = {
   execute: 0,
   chat: 1,
   overview: 2,
-  runs: 3,
-  settings: 4,
+  knowledge: 3,
+  runs: 4,
+  settings: 5,
 };
 
 export default function AgentDetailPage({
@@ -40,13 +48,37 @@ export default function AgentDetailPage({
 }) {
   const { slug } = use(params);
   const router = useRouter();
+  const qc = useQueryClient();
+  const { replaceParams } = useUrlParams();
   const searchParams = useSearchParams();
   const initialQ = searchParams.get("q");
   const conversationId = searchParams.get("conversation");
+  const tabParam = searchParams.get("tab");
+  const draftPreview = searchParams.get("draft") === "1";
+  const openWidgetBuilder = searchParams.get("open_widget_builder") === "1";
+  const autoGenerateWidget = searchParams.get("auto_generate") === "1";
+  const widgetTypeParam = searchParams.get("widget_type");
+  const widgetPrompt = searchParams.get("widget_prompt");
+  const highlightWidget = searchParams.get("highlight_widget");
 
-  const { data: agent, isLoading } = useQuery({
+  const tabFromUrl = (value: string | null): AgentTab | null => {
+    if (
+      value === "execute" ||
+      value === "chat" ||
+      value === "overview" ||
+      value === "knowledge" ||
+      value === "runs" ||
+      value === "settings"
+    ) {
+      return value;
+    }
+    return null;
+  };
+
+  const { data: agent, isLoading, isError } = useQuery({
     queryKey: ["agent", slug],
     queryFn: () => fetchAgentBySlug(slug),
+    retry: false,
   });
 
   const { data: me } = useQuery({
@@ -60,7 +92,10 @@ export default function AgentDetailPage({
   const [resumeStartedAt, setResumeStartedAt] = useState<string | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const [tab, setTab] = useState<AgentTab>(() => (conversationId ? "chat" : "execute"));
+  const [tab, setTab] = useState<AgentTab>(() => {
+    if (conversationId) return "chat";
+    return tabFromUrl(tabParam) ?? "execute";
+  });
 
   const { data: activity = [] } = useQuery({
     queryKey: ["activity", agent?.id],
@@ -68,27 +103,84 @@ export default function AgentDetailPage({
     enabled: !!agent?.id,
   });
 
+  useEffect(() => {
+    if (!agent?.id) return;
+    void qc.prefetchQuery({
+      queryKey: ["agent-execution", agent.id],
+      queryFn: () => fetchAgentExecution(agent.id),
+      staleTime: 5 * 60_000,
+    });
+  }, [agent?.id, qc]);
+
   const prevTabIndex = useRef(0);
   const panelDirection =
     TAB_ORDER[tab] >= prevTabIndex.current ? ("forward" as const) : ("backward" as const);
 
-  const pushToChat = useCallback((exchange: ChatExchange) => {
-    setChatMessages((m) => finalizePendingExchange(m, exchange));
-    setTab("chat");
-  }, []);
+  const chatEnabled = agent?.capabilities?.chat_enabled === true;
 
-  const onActionRunStart = useCallback((userLine: string) => {
-    setChatMessages((m) => appendPendingUserAction(m, userLine));
-    setTab("chat");
-  }, []);
+  const selectTab = useCallback(
+    (next: AgentTab) => {
+      setTab(next);
+      if (next === "overview") {
+        replaceParams({ set: { tab: "overview" } });
+        return;
+      }
+      if (next === "execute") {
+        replaceParams({ delete: ["tab", ...OVERVIEW_PANEL_URL_KEYS] });
+        return;
+      }
+      replaceParams({
+        set: { tab: next },
+        delete: [...OVERVIEW_PANEL_URL_KEYS],
+      });
+    },
+    [replaceParams]
+  );
+
+  const pushToChat = useCallback(
+    (exchange: ChatExchange) => {
+      setChatMessages((m) => finalizePendingExchange(m, exchange));
+      if (chatEnabled) selectTab("chat");
+    },
+    [chatEnabled, selectTab]
+  );
+
+  const onActionRunStart = useCallback(
+    (userLine: string) => {
+      setChatMessages((m) => appendPendingUserAction(m, userLine));
+      if (chatEnabled) selectTab("chat");
+    },
+    [chatEnabled, selectTab]
+  );
+
+  useEffect(() => {
+    const fromUrl = tabFromUrl(tabParam);
+    if (fromUrl) setTab(fromUrl);
+  }, [tabParam]);
 
   useEffect(() => {
     prevTabIndex.current = TAB_ORDER[tab];
+    const main = document.getElementById("ma-main-scroll");
+    if (main) {
+      main.scrollTop = 0;
+    }
   }, [tab]);
 
   useEffect(() => {
-    if (initialQ && !conversationId) setTab("chat");
-  }, [initialQ, conversationId]);
+    if (initialQ && chatEnabled && !conversationId) selectTab("chat");
+  }, [initialQ, conversationId, chatEnabled, selectTab]);
+
+  useEffect(() => {
+    if (!chatEnabled && tab === "chat") selectTab("execute");
+  }, [chatEnabled, tab, selectTab]);
+
+  useEffect(() => {
+    if (!agent || !agentInCreationWizard(agent)) return;
+    const params = new URLSearchParams({ slug: agent.slug, name: agent.name });
+    if (draftPreview) params.set("draft", "1");
+    if (highlightWidget) params.set("highlight_widget", highlightWidget);
+    router.replace(`/agents/create?${params.toString()}`);
+  }, [agent, draftPreview, highlightWidget, router]);
 
   useEffect(() => {
     if (!conversationId || !agent?.id) {
@@ -99,7 +191,8 @@ export default function AgentDetailPage({
     let cancelled = false;
     setResumeLoading(true);
     setResumeError(null);
-    setTab("chat");
+    if (chatEnabled) setTab("chat");
+    else setTab("execute");
 
     (async () => {
       try {
@@ -107,6 +200,10 @@ export default function AgentDetailPage({
         if (cancelled) return;
         if (detail.agent_slug !== slug) {
           setResumeError("این گفت‌وگو متعلق به ایجنت دیگری است.");
+          return;
+        }
+        if (!chatEnabled) {
+          setResumeError("این ایجنت گفت‌وگو ندارد — فقط نتیجه در تب «اجرا و راهنما» نمایش داده می‌شود.");
           return;
         }
         const msgs: ChatMessage[] = detail.messages.map((m) => ({
@@ -134,14 +231,25 @@ export default function AgentDetailPage({
     return () => {
       cancelled = true;
     };
-  }, [conversationId, agent?.id, slug]);
+  }, [conversationId, agent?.id, slug, chatEnabled]);
 
-  if (isLoading || !agent) {
-    return <div className="p-6 text-stone-500">در حال بارگذاری ایجنت…</div>;
+  if (isLoading) {
+    return <div className="page-padding text-stone-500">در حال بارگذاری ایجنت…</div>;
+  }
+
+  if (isError || !agent) {
+    return (
+      <div className="page-padding space-y-4">
+        <p className="text-sm text-accent-red">ایجنت «{slug}» پیدا نشد.</p>
+        <Button variant="secondary" onClick={() => router.push("/agents")}>
+          بازگشت به فهرست ایجنت‌ها
+        </Button>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-4 p-6">
+    <div className="page-padding space-y-4">
       <Stagger initial={false} className="space-y-4" delayChildren={0.03} staggerChildren={0.05}>
         <StaggerItem variant="popIn">
           <Card>
@@ -152,7 +260,6 @@ export default function AgentDetailPage({
                 </p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
                   <h1 className="text-xl font-bold text-stone-900">{agent.name}</h1>
-                  <Badge variant="muted">v۱.۴ · آنلاین</Badge>
                   <Badge variant={agent.status === "active" ? "success" : "muted"}>
                     {statusLabel(agent.status)}
                   </Badge>
@@ -163,34 +270,55 @@ export default function AgentDetailPage({
                 <p className="mt-1 text-sm text-stone-500">{agent.description}</p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div
+                className="touch-scroll-x flex w-full gap-2 sm:w-auto sm:flex-wrap"
+                data-ma-guide="agent-tabs"
+              >
                 <Button
                   variant={tab === "execute" ? "primary" : "secondary"}
-                  onClick={() => setTab("execute")}
+                  onClick={() => selectTab("execute")}
+                  data-ma-guide="agent-tab-execute"
+                  className="shrink-0 whitespace-nowrap"
                 >
                   اجرا و راهنما
                 </Button>
-                <Button
-                  variant={tab === "chat" ? "primary" : "secondary"}
-                  onClick={() => setTab("chat")}
-                >
-                  گفت‌وگو
-                </Button>
+                {chatEnabled && (
+                  <Button
+                    variant={tab === "chat" ? "primary" : "secondary"}
+                    onClick={() => selectTab("chat")}
+                    data-ma-guide="agent-tab-chat"
+                    className="shrink-0 whitespace-nowrap"
+                  >
+                    گفت‌وگو
+                  </Button>
+                )}
                 <Button
                   variant={tab === "overview" ? "primary" : "secondary"}
-                  onClick={() => setTab("overview")}
+                  onClick={() => selectTab("overview")}
+                  data-ma-guide="agent-tab-overview"
+                  className="shrink-0 whitespace-nowrap"
                 >
                   پنل ایجنت
                 </Button>
                 <Button
+                  variant={tab === "knowledge" ? "primary" : "secondary"}
+                  onClick={() => selectTab("knowledge")}
+                  data-ma-guide="agent-tab-knowledge"
+                  className="shrink-0 whitespace-nowrap"
+                >
+                  پایگاه دانش
+                </Button>
+                <Button
                   variant={tab === "runs" ? "primary" : "secondary"}
-                  onClick={() => setTab("runs")}
+                  onClick={() => selectTab("runs")}
+                  className="shrink-0 whitespace-nowrap"
                 >
                   تاریخچه اجرا
                 </Button>
                 <Button
                   variant={tab === "settings" ? "primary" : "secondary"}
-                  onClick={() => setTab("settings")}
+                  onClick={() => selectTab("settings")}
+                  className="shrink-0 whitespace-nowrap"
                 >
                   تنظیمات
                 </Button>
@@ -199,17 +327,19 @@ export default function AgentDetailPage({
           </Card>
         </StaggerItem>
 
-        <PanelTransition transitionKey={tab} direction={panelDirection}>
+        <PanelTransition transitionKey={tab} direction={panelDirection} preset="fade">
           {tab === "execute" && (
             <AgentExecutionPanel
               agent={agent}
+              chatMessages={chatMessages}
+              onChatMessagesChange={setChatMessages}
               onChatExchange={pushToChat}
               onActionRunStart={onActionRunStart}
               showAdminTest={!!me?.is_superuser}
             />
           )}
 
-          {tab === "chat" && (
+          {tab === "chat" && chatEnabled && (
             <>
               {resumeLoading && (
                 <p className="text-sm text-stone-500">در حال بارگذاری گفت‌وگو…</p>
@@ -231,7 +361,22 @@ export default function AgentDetailPage({
             </>
           )}
 
-          {tab === "overview" && <AgentOverviewPanel agentId={agent.id} />}
+          {tab === "overview" && (
+            <AgentOverviewPanel
+              agentId={agent.id}
+              agent={agent}
+              editable={!!me?.is_superuser}
+              showAdminTest={!!me?.is_superuser}
+              draftPreview={draftPreview}
+              autoGenerateWidget={autoGenerateWidget}
+              widgetBuilderType={widgetTypeParam ?? undefined}
+              widgetPrompt={widgetPrompt}
+              highlightWidget={highlightWidget}
+              onOpenKnowledge={() => selectTab("knowledge")}
+            />
+          )}
+
+          {tab === "knowledge" && <AgentKnowledgePanel agent={agent} />}
 
           {tab === "runs" && (
             <Card>
@@ -246,7 +391,7 @@ export default function AgentDetailPage({
                   >
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <p className="font-semibold text-stone-800">{a.action}</p>
-                      {a.input_text && (
+                      {a.input_text && chatEnabled && (
                         <Button
                           variant="secondary"
                           className="px-2 py-1 text-xs"
@@ -257,10 +402,34 @@ export default function AgentDetailPage({
                           ادامه در گفت‌وگو
                         </Button>
                       )}
+                      {a.output_text && !chatEnabled && (
+                        <Button
+                          variant="secondary"
+                          className="px-2 py-1 text-xs"
+                          onClick={() => {
+                            setChatMessages([
+                              { role: "user", content: a.input_text || a.action },
+                              {
+                                role: "assistant",
+                                content: formatAssistantOutput(a.output_text),
+                              },
+                            ]);
+                            setTab("execute");
+                          }}
+                        >
+                          مشاهده نتیجه
+                        </Button>
+                      )}
                     </div>
-                    <p className="mt-0.5 truncate text-stone-500">{a.input_text}</p>
+                    {a.input_text && (
+                      <p className="mt-0.5 truncate text-stone-500">
+                        {plainTextUserPreview(a.input_text)}
+                      </p>
+                    )}
                     {a.output_text && (
-                      <p className="mt-1 line-clamp-2 text-xs text-stone-600">{a.output_text}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-stone-600">
+                        {plainTextOutputPreview(a.output_text)}
+                      </p>
                     )}
                   </div>
                 ))}
@@ -281,11 +450,12 @@ export default function AgentDetailPage({
                   <span className="text-stone-500">شناسه:</span> {agent.slug}
                 </p>
                 <p>
-                  <span className="text-stone-500">نوع:</span> {agent.kind}
+                  <span className="text-stone-500">نوع:</span>{" "}
+                  {agent.kind ? KIND_LABELS[agent.kind] ?? agent.kind : "—"}
                 </p>
                 <p>
-                  <span className="text-stone-500">مدل:</span> {agent.model_provider} /{" "}
-                  {agent.model_name}
+                  <span className="text-stone-500">مدل:</span>{" "}
+                  {agent.model_provider} / {agent.model_name}
                 </p>
                 <p>
                   <span className="text-stone-500">ابزارها:</span>{" "}

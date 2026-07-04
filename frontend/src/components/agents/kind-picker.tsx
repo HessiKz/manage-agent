@@ -30,6 +30,7 @@ export function KindPicker({ value, onChange }: Props) {
           <StaggerItem key={kind} variant="scaleIn">
             <button
               type="button"
+              data-ma-support={`wizard-kind-${kind}`}
               onClick={() => onChange(kind, { ...KIND_PRESETS[kind] })}
               className={cn(
                 "w-full rounded-2xl border p-4 text-right transition-colors duration-150",

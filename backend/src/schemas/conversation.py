@@ -24,6 +24,14 @@ class ConversationListItem(BaseModel):
     message_count: int = 0
 
 
+class SupportThreadListItem(BaseModel):
+    thread_id: str
+    preview: str = ""
+    started_at: str | None = None
+    updated_at: str | None = None
+    message_count: int = 0
+
+
 class ConversationDetail(BaseModel):
     id: str
     agent_id: str

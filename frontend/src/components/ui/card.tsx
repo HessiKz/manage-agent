@@ -18,7 +18,7 @@ export function CardHeader({
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("border-b border-stone-100 px-5 py-4", className)}>
+    <div className={cn("border-b border-surface-border/70 px-5 py-4", className)}>
       {children}
     </div>
   );

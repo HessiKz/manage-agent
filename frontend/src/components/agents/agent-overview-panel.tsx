@@ -1,65 +1,306 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import {
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { AgentHrSavingsPanel } from "@/components/agents/agent-hr-savings-panel";
-import { ChartBox } from "@/components/charts/chart-box";
-import {
-  axisXMonth,
-  axisY,
-  legendBottom,
-  legendTop,
-  lineChartMargin,
-  pieChartMargin,
-  pieGeometry,
-  tooltipContentStyle,
-} from "@/components/charts/recharts-rtl";
-import { StatCard } from "@/components/agents/agent-card";
-import type { StatCardChartVariant } from "@/components/charts/stat-card-chart";
-import { Badge } from "@/components/ui/badge";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, RefreshCw, Settings2 } from "lucide-react";
+import { AgentKnowledgeSummary } from "@/components/agents/agent-knowledge-summary";
+import { AgentDashboardEditorPanel } from "@/components/agents/agent-dashboard-editor-panel";
+import { AgentDashboardView } from "@/components/agents/agent-dashboard-view";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ClientNumber } from "@/components/ui/client-date";
-import { DashboardCol, DashboardTwoColRow } from "@/components/layout/dashboard-card-grid";
-import { fetchAgentDashboard } from "@/lib/api";
-import { formatMetricDelta } from "@/lib/utils";
+import { fetchAgentDashboard, generateAgentDashboard } from "@/lib/api";
+import {
+  SUPPORT_DASHBOARD_GENERATE_MS,
+  waitForDashboardDraft,
+} from "@/lib/support-dashboard-generate";
+import {
+  applyWidgetHighlight,
+  invalidateAgentDashboardQueries,
+} from "@/lib/dashboard-draft";
+import {
+  backendKindForBuilder,
+  builderTypeFromBackendKind,
+  defaultWidgetGeneratePrompt,
+  type BuilderWidgetType,
+} from "@/lib/widget-builder";
+import {
+  DRAFT_PREVIEW_URL_KEYS,
+  useUrlParams,
+  WIDGET_BUILDER_URL_KEYS,
+} from "@/lib/url-search-params";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
+import { useDashboardBridgeHostBinding } from "@/hooks/use-dashboard-support-bridge";
+import type { Agent } from "@/types";
+import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 
-const PIE_COLORS = ["#b86828", "#c88848", "#e8c8a8", "#2868a0", "#7858a0"] as const;
+type Props = {
+  agentId: string;
+  agent?: Agent;
+  editable?: boolean;
+  showAdminTest?: boolean;
+  draftPreview?: boolean;
+  autoGenerateWidget?: boolean;
+  autoOpenWidgetBuilder?: boolean;
+  widgetBuilderType?: string;
+  widgetPrompt?: string | null;
+  highlightWidget?: string | null;
+  onOpenKnowledge?: () => void;
+};
 
-function isChartVariant(v: string | undefined): v is StatCardChartVariant {
-  if (!v) return false;
-  const allowed: StatCardChartVariant[] = [
-    "savings",
-    "hours",
-    "alerts",
-    "accuracy",
-    "payroll-headcount",
-    "payroll-payout",
-    "payroll-review",
-    "payroll-tax",
-  ];
-  return allowed.includes(v as StatCardChartVariant);
-}
+export function AgentOverviewPanel({
+  agentId,
+  agent,
+  editable,
+  showAdminTest = false,
+  draftPreview = false,
+  autoGenerateWidget = false,
+  autoOpenWidgetBuilder = false,
+  widgetBuilderType,
+  widgetPrompt,
+  highlightWidget,
+  onOpenKnowledge,
+}: Props) {
+  const { replaceParams, clearParams } = useUrlParams();
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [generatingWidget, setGeneratingWidget] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [viewDraft, setViewDraft] = useState(draftPreview);
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [refreshingDraft, setRefreshingDraft] = useState(false);
+  const autoGenerateRan = useRef(false);
+  const autoGenerateInFlight = useRef(false);
 
-export function AgentOverviewPanel({ agentId }: { agentId: string }) {
-  const { data: dashboard, isLoading } = useQuery({
-    queryKey: ["agent-dashboard", agentId],
-    queryFn: () => fetchAgentDashboard(agentId),
+  const clearGeneratingOverlay = useCallback(() => {
+    autoGenerateInFlight.current = false;
+    setGeneratingWidget(false);
+  }, []);
+
+  const builderInitialType: BuilderWidgetType | undefined =
+    builderTypeFromBackendKind(widgetBuilderType ?? "") ??
+    (widgetBuilderType === "stat_card" ? "stat_card" : undefined);
+
+  useEffect(() => {
+    setViewDraft(draftPreview);
+    if (draftPreview) {
+      setDraftRevision((n) => n + 1);
+    }
+  }, [draftPreview]);
+
+  useEffect(() => {
+    if (autoOpenWidgetBuilder && editable && !autoGenerateWidget) {
+      setEditing(true);
+    }
+  }, [autoOpenWidgetBuilder, autoGenerateWidget, editable]);
+
+  useEffect(() => {
+    if (!editing) {
+      void invalidateAgentDashboardQueries(qc, agentId);
+    }
+  }, [editing, agentId, qc]);
+
+  const showingDraft = viewDraft || draftPreview;
+
+  const { data: liveDashboard, isLoading: liveLoading } = useQuery({
+    queryKey: ["agent-dashboard", agentId, "live"],
+    queryFn: () => fetchAgentDashboard(agentId, false),
+    staleTime: 0,
   });
+
+  const pendingDraft = Boolean(liveDashboard?.has_pending_draft);
+
+  const {
+    data: draftDashboard,
+    isLoading: draftLoading,
+    isFetching: draftFetching,
+  } = useQuery({
+    queryKey: ["agent-dashboard", agentId, "draft", draftRevision],
+    queryFn: () => fetchAgentDashboard(agentId, true),
+    enabled: showingDraft,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  const reloadDraftPreview = useCallback(async () => {
+    setRefreshingDraft(true);
+    try {
+      setDraftRevision((n) => n + 1);
+      await invalidateAgentDashboardQueries(qc, agentId);
+    } finally {
+      setRefreshingDraft(false);
+    }
+  }, [agentId, qc]);
+
+  const openDraftPreview = useCallback(async () => {
+    setViewDraft(true);
+    setDraftRevision((n) => n + 1);
+    replaceParams({ set: { tab: "overview", draft: "1" } });
+    await invalidateAgentDashboardQueries(qc, agentId);
+  }, [agentId, qc, replaceParams]);
+
+  useDashboardBridgeHostBinding(agentId, {
+    enterEditMode: () => setEditing(true),
+    clearGeneratingOverlay,
+    openDraftPreview: () => void openDraftPreview(),
+  });
+
+  const closeDraftPreview = useCallback(async () => {
+    setViewDraft(false);
+    clearParams(DRAFT_PREVIEW_URL_KEYS);
+    await invalidateAgentDashboardQueries(qc, agentId);
+  }, [agentId, clearParams, qc]);
+
+  const exitEditMode = useCallback(async () => {
+    setEditing(false);
+    clearParams(WIDGET_BUILDER_URL_KEYS);
+    await invalidateAgentDashboardQueries(qc, agentId);
+    await qc.invalidateQueries({ queryKey: ["agent", agent?.slug] });
+  }, [agent?.slug, agentId, clearParams, qc]);
+
+  useEffect(() => {
+    if (!autoGenerateWidget) {
+      autoGenerateRan.current = false;
+      autoGenerateInFlight.current = false;
+      setGeneratingWidget(false);
+      return;
+    }
+    if (!editable || !agent?.id || autoGenerateRan.current || autoGenerateInFlight.current) {
+      return;
+    }
+    if (liveLoading) return;
+
+    autoGenerateRan.current = true;
+
+    if (pendingDraft) {
+      void openDraftPreview();
+      clearParams([...WIDGET_BUILDER_URL_KEYS, "auto_generate", "widget_prompt"]);
+      return;
+    }
+
+    const builderType = builderInitialType ?? "stat_card";
+    const backendKind = backendKindForBuilder(builderType);
+    const prompt =
+      widgetPrompt?.trim() || defaultWidgetGeneratePrompt(agent.name, builderType);
+
+    autoGenerateInFlight.current = true;
+    setGeneratingWidget(true);
+    setGenerateError(null);
+
+    const controller = new AbortController();
+    const watchdog = window.setTimeout(() => controller.abort(), SUPPORT_DASHBOARD_GENERATE_MS);
+
+    void (async () => {
+      try {
+        await generateAgentDashboard(
+          agentId,
+          {
+            prompt,
+            widget_type: backendKind,
+            merge_with_existing: true,
+          },
+          { signal: controller.signal }
+        );
+        const hasDraft = await waitForDashboardDraft(agentId, 20_000);
+        if (!hasDraft) {
+          throw new Error("پیش‌نویس ویجت ذخیره نشد");
+        }
+        await invalidateAgentDashboardQueries(qc, agentId);
+        setViewDraft(true);
+        setDraftRevision((n) => n + 1);
+        replaceParams({
+          set: {
+            tab: "overview",
+            draft: "1",
+            highlight_widget: backendKind,
+          },
+          delete: [...WIDGET_BUILDER_URL_KEYS, "auto_generate", "widget_prompt"],
+        });
+      } catch {
+        setGenerateError("ساخت خودکار ویجت ناموفق بود — فرم دستی باز می‌شود.");
+        setEditing(true);
+        clearParams(["auto_generate", "widget_prompt"]);
+      } finally {
+        window.clearTimeout(watchdog);
+        autoGenerateInFlight.current = false;
+        setGeneratingWidget(false);
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(watchdog);
+      autoGenerateInFlight.current = false;
+      setGeneratingWidget(false);
+    };
+  }, [
+    agent?.id,
+    agent?.name,
+    agentId,
+    autoGenerateWidget,
+    builderInitialType,
+    clearParams,
+    editable,
+    liveLoading,
+    openDraftPreview,
+    pendingDraft,
+    qc,
+    replaceParams,
+    widgetPrompt,
+  ]);
+
+  const dashboard = showingDraft ? draftDashboard : liveDashboard;
+  const isLoading = showingDraft ? draftLoading : liveLoading;
+
+  useEffect(() => {
+    if (!dashboard || !highlightWidget || !showingDraft) return;
+    const timer = window.setTimeout(() => applyWidgetHighlight(highlightWidget), 400);
+    return () => window.clearTimeout(timer);
+  }, [dashboard, highlightWidget, showingDraft, draftRevision]);
+
+  if (generatingWidget) {
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-3 py-16 text-center"
+        data-ma-support="widget-auto-generating"
+      >
+        <LoadingSpinner />
+        <p className="text-sm font-medium text-stone-800">در حال ساخت پیش‌نویس ویجت…</p>
+        <p className="max-w-sm text-xs text-stone-500">
+          کارت‌های شاخص بر اساس مشخصات ایجنت تولید می‌شوند — حداکثر حدود ۹۰ ثانیه.
+        </p>
+        <Button
+          type="button"
+          variant="secondary"
+          className="mt-2 text-xs"
+          onClick={() => {
+            clearGeneratingOverlay();
+            setGenerateError("ساخت خودکار لغو شد — می‌توانید از «سفارشی‌سازی پنل» ادامه دهید.");
+            setEditing(true);
+            clearParams(["auto_generate", "widget_prompt"]);
+          }}
+        >
+          لغو و ادامه دستی
+        </Button>
+      </div>
+    );
+  }
+
+  if (editing && editable) {
+    return (
+      <AgentDashboardEditorPanel
+        agentId={agentId}
+        agent={agent}
+        showAdminTest={showAdminTest}
+        mode="edit"
+        initialShowDraft={showingDraft || pendingDraft}
+        autoOpenWidgetBuilder={autoOpenWidgetBuilder}
+        builderInitialType={builderInitialType}
+        highlightWidget={highlightWidget}
+        onApproved={() => void exitEditMode()}
+      />
+    );
+  }
 
   if (isLoading || !dashboard) {
     return (
@@ -76,197 +317,118 @@ export function AgentOverviewPanel({ agentId }: { agentId: string }) {
     );
   }
 
-  const lineData = dashboard.line_chart?.points ?? [];
-  const pieData = dashboard.pie_chart?.slices ?? [];
-
   return (
-    <Stagger delayChildren={0.04} staggerChildren={0.05} className="space-y-4">
-      <StaggerItem variant="fadeIn">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-lg font-bold text-stone-900">{dashboard.panel_title}</h2>
-            <p className="text-xs text-stone-500">{dashboard.domain_label}</p>
-          </div>
-          <Badge variant="muted">{dashboard.profile}</Badge>
-        </div>
-      </StaggerItem>
-
-      {dashboard.hr_savings ? (
-        <AgentHrSavingsPanel savings={dashboard.hr_savings} />
-      ) : null}
-
-      {dashboard.run_summary && (
-        <StaggerItem variant="fadeIn">
-          <Card className="border-surface-border bg-surface-muted/30">
-            <CardBody className="flex flex-wrap gap-4 py-3 text-xs text-stone-600">
-              <span>
-                <strong className="text-stone-800">اجرای ثبت‌شده:</strong>{" "}
-                {dashboard.run_summary.total_runs} (موفق {dashboard.run_summary.success_runs} · خطا{" "}
-                {dashboard.run_summary.error_runs})
-              </span>
-              <span>
-                <strong className="text-stone-800">میانگین مدت:</strong>{" "}
-                {dashboard.run_summary.avg_duration_label}
-              </span>
-              <span>
-                <strong className="text-stone-800">هزینه API:</strong>{" "}
-                {dashboard.run_summary.cost_label}
-              </span>
-              <span dir="ltr">
-                <strong className="text-stone-800">توکن:</strong>{" "}
-                <ClientNumber value={dashboard.run_summary.tokens_total} />
-              </span>
-            </CardBody>
-          </Card>
-        </StaggerItem>
+    <div className="space-y-4">
+      {generateError && (
+        <p className="rounded-xl border border-accent-red/20 bg-accent-red/5 px-3 py-2 text-sm text-accent-red">
+          {generateError}
+        </p>
       )}
-
-      <Stagger delayChildren={0.02} staggerChildren={0.05} className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {dashboard.stat_cards.map((card) => (
-          <StaggerItem key={card.label} variant="scaleIn">
-            <StatCard
-              label={card.label}
-              value={card.value}
-              hint={card.hint}
-              chartVariant={isChartVariant(card.chartVariant) ? card.chartVariant : undefined}
-            />
-          </StaggerItem>
-        ))}
-      </Stagger>
-
-      {(dashboard.line_chart || dashboard.pie_chart) && (
-        <DashboardTwoColRow className="gap-4">
-          {dashboard.line_chart && (
-            <DashboardCol>
-              <Card className="w-full">
-                <CardHeader>
-                  <h3 className="font-bold">{dashboard.line_chart.title}</h3>
-                </CardHeader>
-                <CardBody className="h-[220px] overflow-hidden pt-0">
-                  <ChartBox height={220} className="!min-h-0 h-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={lineData} margin={lineChartMargin}>
-                        <CartesianGrid stroke="#e8e0d8" vertical={false} />
-                        <XAxis dataKey="month" {...axisXMonth} />
-                        <YAxis {...axisY} />
-                        <Tooltip contentStyle={tooltipContentStyle} />
-                        <Legend {...legendTop} />
-                        {dashboard.line_chart.series.map((s, idx) => (
-                          <Line
-                            key={s.dataKey}
-                            type="monotone"
-                            dataKey={s.dataKey}
-                            name={s.name}
-                            stroke={PIE_COLORS[idx % PIE_COLORS.length]}
-                            strokeWidth={2}
-                            strokeDasharray={s.dashed ? "6 4" : undefined}
-                            dot={{ r: 3 }}
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </ChartBox>
-                </CardBody>
-              </Card>
-            </DashboardCol>
-          )}
-
-          {dashboard.pie_chart && pieData.length > 0 && (
-            <DashboardCol>
-              <Card className="w-full">
-                <CardHeader>
-                  <h3 className="font-bold">{dashboard.pie_chart.title}</h3>
-                </CardHeader>
-                <CardBody className="h-[220px] overflow-hidden pt-0">
-                  <ChartBox height={220} className="!min-h-0 h-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart margin={pieChartMargin}>
-                        <Tooltip contentStyle={tooltipContentStyle} />
-                        <Pie data={pieData} dataKey="value" nameKey="name" {...pieGeometry}>
-                          {pieData.map((_, idx) => (
-                            <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Legend {...legendBottom} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </ChartBox>
-                </CardBody>
-              </Card>
-            </DashboardCol>
-          )}
-        </DashboardTwoColRow>
-      )}
-
-      {dashboard.review_table && dashboard.review_table.rows.length > 0 && (
-        <StaggerItem variant="slideUp">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-bold">{dashboard.review_table.title}</h3>
-                <div className="flex gap-2">
-                  <Button variant="secondary">رد همه</Button>
-                  <Button>تأیید همه</Button>
-                </div>
+      {showingDraft && (
+        <Stagger replayOnRoute>
+          <StaggerItem variant="fadeIn">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50/60 px-4 py-3 text-sm text-brand-900">
+              <div>
+                <p className="font-semibold">پیش‌نمایش ویجت</p>
+                <p className="mt-0.5 text-stone-700">
+                  {draftFetching || refreshingDraft
+                    ? "در حال بارگذاری آخرین پیش‌نویس…"
+                    : dashboard.is_draft_preview
+                      ? "این همان پیش‌نویس ذخیره‌شده است — برای انتشار نهایی «تأیید در سفارشی‌سازی» را بزنید."
+                      : dashboard.draft_unavailable
+                        ? "پیش‌نویسی یافت نشد؛ ممکن است قبلاً تأیید یا حذف شده باشد."
+                        : "در حال نمایش پیش‌نویس…"}
+                </p>
               </div>
-            </CardHeader>
-            <CardBody className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-xs text-stone-400">
-                    {dashboard.review_table.columns.map((col) => (
-                      <th key={col.key} className="py-2 text-right font-semibold">
-                        {col.label}
-                      </th>
-                    ))}
-                    <th className="py-2 text-right font-semibold">اقدام</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dashboard.review_table.rows.map((r, idx) => (
-                    <StaggerItem
-                      key={r.id}
-                      variant="slideRight"
-                      as="tr"
-                      className="border-t border-stone-100"
-                      customTransition={{ delay: idx * 0.04 }}
-                    >
-                      {dashboard.review_table!.columns.map((col) => {
-                        const val = r.cells[col.key] ?? "—";
-                        const isDelta = col.key === "delta";
-                        return (
-                          <td key={col.key} className="py-3 text-stone-600">
-                            {isDelta ? (
-                              <Badge variant="risk" dir="ltr" className="font-bold">
-                                {formatMetricDelta(val)}
-                              </Badge>
-                            ) : col.key === "employee" || col.key === "id" ? (
-                              <span className="font-semibold text-stone-800">{val}</span>
-                            ) : (
-                              val
-                            )}
-                          </td>
-                        );
-                      })}
-                      <td className="py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <Button className="!px-3 !py-1.5 text-xs">تأیید</Button>
-                          <Button
-                            variant="secondary"
-                            className="!px-3 !py-1.5 text-xs hover:border-accent-red/30 hover:bg-[#f5e0e0] hover:text-accent-red"
-                          >
-                            رد
-                          </Button>
-                        </div>
-                      </td>
-                    </StaggerItem>
-                  ))}
-                </tbody>
-              </table>
-            </CardBody>
-          </Card>
-        </StaggerItem>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  className="gap-2"
+                  disabled={refreshingDraft || draftFetching}
+                  onClick={() => void reloadDraftPreview()}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${refreshingDraft || draftFetching ? "animate-spin" : ""}`}
+                  />
+                  بروزرسانی
+                </Button>
+                <Button variant="secondary" onClick={() => void closeDraftPreview()}>
+                  بازگشت به نسخه منتشرشده
+                </Button>
+              </div>
+            </div>
+          </StaggerItem>
+        </Stagger>
       )}
-    </Stagger>
+
+      {!showingDraft && pendingDraft && (
+        <Stagger replayOnRoute>
+          <StaggerItem variant="fadeIn">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+              <div>
+                <p className="font-semibold">پیش‌نویس ویجت ذخیره شده</p>
+                <p className="mt-0.5 text-amber-900/80">
+                  ویجت ساخته‌شده هنوز منتشر نشده — با «مشاهده پیش‌نویس» همان را می‌بینید.
+                </p>
+              </div>
+              <Button className="shrink-0 gap-2" onClick={() => void openDraftPreview()}>
+                <Eye className="h-4 w-4" />
+                مشاهده پیش‌نویس
+              </Button>
+            </div>
+          </StaggerItem>
+        </Stagger>
+      )}
+
+      {editable && (
+        <Stagger replayOnRoute>
+          <StaggerItem variant="fadeIn">
+            <div className="flex flex-wrap justify-end gap-2">
+              {pendingDraft && (
+                <Button
+                  variant="secondary"
+                  className="gap-2"
+                  onClick={() => void openDraftPreview()}
+                >
+                  <Eye className="h-4 w-4" />
+                  {showingDraft ? "بروزرسانی پیش‌نمایش" : "پیش‌نمایش"}
+                </Button>
+              )}
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                <Settings2 className="h-4 w-4" />
+                سفارشی‌سازی پنل
+              </Button>
+            </div>
+          </StaggerItem>
+        </Stagger>
+      )}
+
+      <AgentDashboardView
+        dashboard={dashboard}
+        showReviewActions
+        preview={showingDraft && !dashboard.draft_unavailable}
+      />
+
+      {agent && (
+        <Card data-ma-support="agent-dashboard-knowledge">
+          <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-bold text-stone-900">پایگاه دانش</h3>
+              <p className="mt-0.5 text-xs text-stone-500">
+                داده‌ها و فایل‌هایی که این ایجنت برای پاسخ‌گویی استفاده می‌کند.
+              </p>
+            </div>
+            {onOpenKnowledge && (
+              <Button type="button" variant="secondary" className="text-xs" onClick={onOpenKnowledge}>
+                مدیریت کامل
+              </Button>
+            )}
+          </CardHeader>
+          <CardBody>
+            <AgentKnowledgeSummary agent={agent} />
+          </CardBody>
+        </Card>
+      )}
+    </div>
   );
 }

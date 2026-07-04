@@ -7,6 +7,40 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.main import app
+from src.models.agent import AgentKind
+from src.schemas.agent_capabilities import clamp_capabilities_for_kind
+
+
+def test_worker_clamps_supervisor_and_chat():
+    caps = clamp_capabilities_for_kind(
+        AgentKind.WORKER,
+        {"supervisor_enabled": True, "chat_enabled": True, "can_call_agents": True, "templates_enabled": True},
+    )
+    assert caps["supervisor_enabled"] is False
+    assert caps["chat_enabled"] is False
+    assert caps["can_call_agents"] is False
+    assert caps["templates_enabled"] is False
+
+
+def test_custom_clamps_supervisor():
+    caps = clamp_capabilities_for_kind(AgentKind.CUSTOM, {"supervisor_enabled": True})
+    assert caps["supervisor_enabled"] is False
+
+
+def test_supervisor_forces_routing_caps():
+    caps = clamp_capabilities_for_kind(
+        AgentKind.SUPERVISOR,
+        {
+            "supervisor_enabled": False,
+            "actions_enabled": True,
+            "can_call_agents": True,
+            "chat_enabled": False,
+        },
+    )
+    assert caps["supervisor_enabled"] is True
+    assert caps["chat_enabled"] is True
+    assert caps["actions_enabled"] is False
+    assert caps["can_call_agents"] is False
 
 
 @pytest.fixture(scope="module")

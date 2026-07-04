@@ -34,7 +34,9 @@ def test_claude_opus_4_7_omits_temperature(monkeypatch):
 def test_gpt_model_includes_temperature(monkeypatch):
     _use_gateway(monkeypatch)
     llm = build_llm(_fake_agent(model_name="gpt-4o-mini"))
-    assert llm.temperature == 0.2
+    # Platform is hard-locked to claude-opus-4-8; Claude rejects temperature.
+    assert llm.temperature is None
+    assert llm.model_name == "claude-opus-4-8"
 
 
 def test_cursor_provider_pins_model(monkeypatch):
@@ -50,5 +52,5 @@ def test_cursor_provider_pins_model(monkeypatch):
         }
     )
     llm = build_llm(_fake_agent(model_name="claude-opus-4-7"))
-    assert llm.model_name == "auto"
+    assert llm.model_name == "claude-opus-4-8"
     assert str(llm.openai_api_base).rstrip("/") == "http://127.0.0.1:9191/api/v1"

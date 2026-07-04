@@ -12,6 +12,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents_lib.tool_registry import ToolRegistry
+from src.core import llm_runtime
+from src.core.runtime_file_selection import pick_runtime_agent_file
 from src.models.agent import Agent
 from src.models.agent_action import AgentAction
 from src.models.agent_file import AgentFile
@@ -26,6 +28,32 @@ def render_template(template: str, variables: dict) -> str:
     for key, value in variables.items():
         out = out.replace(f"{{{{{key}}}}}", str(value))
         out = re.sub(rf"\{{\{{\s*{re.escape(key)}\s*\}}\}}", str(value), out)
+    return out
+
+
+def _action_input_properties(schema: dict | None) -> dict:
+    if not schema or not isinstance(schema, dict):
+        return {}
+    nested = schema.get("properties")
+    if isinstance(nested, dict):
+        return nested
+    skip = {"properties", "required", "type", "$schema"}
+    return {k: v for k, v in schema.items() if k not in skip and isinstance(v, dict)}
+
+
+def variables_with_schema_defaults(
+    action: AgentAction, variables: dict | None
+) -> dict:
+    """Merge input_schema defaults — UI may show defaults without posting them."""
+    out = dict(variables or {})
+    for key, field in _action_input_properties(action.input_schema).items():
+        if not isinstance(field, dict):
+            continue
+        val = out.get(key)
+        if val is not None and str(val).strip() != "":
+            continue
+        if "default" in field:
+            out[key] = field["default"]
     return out
 
 
@@ -91,26 +119,89 @@ def _has_tool_activity(resp: AgentInvokeResponse) -> bool:
     return any((s.kind in ("tool_call", "tool_result")) for s in trace)
 
 
+_DIRECT_ACTION_TOOLS = frozenset(
+    {"run_agent_script", "report_generate", "resume_screen"}
+)
+
+
 class AgentActionService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def _tool_variables(self, agent_id: UUID, variables: dict | None) -> dict:
-        """Inject agent context and latest uploaded spreadsheet for tools."""
+    async def _latest_runtime_xlsx(self, agent_id: UUID) -> AgentFile | None:
+        result = await self.db.execute(
+            select(AgentFile)
+            .where(AgentFile.agent_id == agent_id)
+            .order_by(desc(AgentFile.created_at))
+            .limit(20)
+        )
+        rows = list(result.scalars().all())
+        from src.karkard.input_selection import pick_runtime_karkard_file
+
+        return pick_runtime_karkard_file(rows) or pick_runtime_agent_file(rows)
+
+    async def _tool_variables(
+        self,
+        agent_id: UUID,
+        variables: dict | None,
+        *,
+        tool_chain: list[str] | None = None,
+    ) -> dict:
+        """Inject agent context and locked runtime file path for tools."""
+        from src.core.agent_tool_files import lock_tool_storage_path
+
         vars_map = dict(variables or {})
         vars_map.setdefault("agent_id", str(agent_id))
-        if "storage_path" not in vars_map:
-            result = await self.db.execute(
-                select(AgentFile)
-                .where(AgentFile.agent_id == agent_id)
-                .where(AgentFile.filename.ilike("%.xlsx"))
-                .order_by(desc(AgentFile.created_at))
-                .limit(1)
+        hint = vars_map.get("storage_path", "")
+        tool_slug = (tool_chain or [None])[0] if tool_chain else None
+        try:
+            vars_map["storage_path"] = str(
+                lock_tool_storage_path(agent_id, hint, tool_slug=tool_slug)
             )
-            latest = result.scalar_one_or_none()
-            if latest:
-                vars_map["storage_path"] = latest.storage_path
+        except FileNotFoundError:
+            if tool_slug == "karkard_process":
+                raise
+            if "storage_path" not in (variables or {}):
+                latest = await self._latest_runtime_xlsx(agent_id)
+                if latest:
+                    vars_map["storage_path"] = latest.storage_path
         return vars_map
+
+    async def _invoke_direct_action_tools(
+        self,
+        agent: Agent,
+        action: AgentAction,
+        tool_vars: dict,
+    ) -> AgentInvokeResponse | None:
+        """Run deterministic tool_chain locally — reliable during training (cursor/no FC)."""
+        chain = [t for t in (action.tool_chain or []) if t in _DIRECT_ACTION_TOOLS]
+        if not chain:
+            return None
+        from src.agents_lib.execution_trace import numbered_trace, trace_step
+        from src.demo.tool_runner import format_tool_results, run_tool_slug
+
+        results = []
+        vars_copy = dict(tool_vars)
+        for slug in chain:
+            results.append(run_tool_slug(slug, vars_copy))
+        output = OrchestratorService(self.db).finalize_output(
+            agent, format_tool_results(results)
+        )
+        trace = numbered_trace(
+            [
+                trace_step(
+                    "direct_action_tool",
+                    f"اجرای مستقیم {chain[0]}",
+                    detail=(results[0].get("summary") or output)[:800],
+                )
+            ]
+        )
+        return AgentInvokeResponse(
+            output=output,
+            execution_trace=trace,
+            llm_provider="direct_tool",
+            model_name=chain[0],
+        )
 
     async def _get_agent(self, agent_id: UUID) -> Agent:
         agent = await self.db.get(Agent, agent_id)
@@ -193,15 +284,19 @@ class AgentActionService:
             raise HTTPException(status_code=422, detail="Actions are disabled for this agent")
 
         action = await self.get_by_slug(agent_id, slug)
-        variables = dict(payload.variables or {})
+        variables = variables_with_schema_defaults(action, payload.variables)
         if "resume_screen" in (action.tool_chain or []):
             role = str(variables.get("role", "")).strip()
             if not role or role.lower() in {"sample", "python", "test"}:
                 variables["role"] = "Backend Engineer"
 
         prompt = render_template(action.prompt_template, variables)
-        tool_vars = await self._tool_variables(agent_id, variables)
+        tool_vars = await self._tool_variables(agent_id, variables, tool_chain=action.tool_chain)
         action_input = _build_action_invoke_input(action, prompt, tool_vars)
+
+        direct = await self._invoke_direct_action_tools(agent, action, tool_vars)
+        if direct is not None:
+            return direct
 
         merged_tools = list(
             dict.fromkeys([*(agent.tool_names or []), *(action.tool_chain or [])])

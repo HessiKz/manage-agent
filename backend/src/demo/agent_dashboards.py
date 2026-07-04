@@ -567,9 +567,45 @@ _SLUG_PROFILE: dict[str, str] = {
 }
 
 
+def is_catalog_agent_slug(slug: str) -> bool:
+    return slug in _SLUG_PROFILE
+
+
+_KEYWORD_PROFILES: list[tuple[tuple[str, ...], str]] = [
+    (("رزومه", "resume", " cv", "جذب", "استخدام", "recruit", "مصاحبه"), "resume"),
+    (("مغایرت", "recon", "تطبیق بانک", "bank-recon", "bank recon"), "bank_recon"),
+    (("بازرس", "پایان ماه", "بستن دوره", "closing", "month-end", "month end"), "invoice"),
+    (("فاکتور", "invoice", "دریافت"), "invoice"),
+    (("حقوق", "دستمزد", "payroll"), "payroll"),
+    (("کارکرد", "karkard", "اضافه‌کار", "کارگزینی"), "karkard"),
+    (("پشتیبانی", "تیکت", "support"), "support"),
+]
+
+
+def _agent_text_blob(agent: Agent) -> str:
+    parts = [
+        str(getattr(agent, "slug", "") or ""),
+        str(getattr(agent, "name", "") or ""),
+        str(getattr(agent, "description", "") or ""),
+    ]
+    return " ".join(parts).lower()
+
+
+def _match_profile_from_text(text: str) -> str | None:
+    for keywords, profile in _KEYWORD_PROFILES:
+        if any(kw in text for kw in keywords):
+            return profile
+    return None
+
+
 def resolve_profile_key(agent: Agent) -> str:
     if agent.slug in _SLUG_PROFILE:
         return _SLUG_PROFILE[agent.slug]
+
+    from_text = _match_profile_from_text(_agent_text_blob(agent))
+    if from_text:
+        return from_text
+
     kind = agent.kind.canonical() if hasattr(agent.kind, "canonical") else agent.kind
     if kind == AgentKind.SUPERVISOR:
         return "supervisor"
@@ -587,7 +623,8 @@ def resolve_profile_key(agent: Agent) -> str:
     if agent.department == "finance":
         return "invoice"
     if agent.department == "hr":
-        return "resume"
+        # HR department alone must not imply recruitment — only explicit resume keywords do.
+        return "karkard"
     return "generic_chat"
 
 
@@ -601,13 +638,14 @@ _BUILDERS = {
     "api": _profile_api,
     "supervisor": _profile_supervisor,
     "file_intake": _profile_file_intake,
-    "generic_chat": lambda: _profile_generic_chat("chat"),
 }
 
 
 def base_dashboard_for_agent(agent: Agent) -> dict[str, Any]:
     key = resolve_profile_key(agent)
-    builder = _BUILDERS.get(key, _BUILDERS["generic_chat"])
     if key == "generic_chat":
-        return builder(agent.name)
-    return builder()
+        return _profile_generic_chat(agent.name)
+    builder = _BUILDERS.get(key)
+    if builder:
+        return builder()
+    return _profile_generic_chat(agent.name)

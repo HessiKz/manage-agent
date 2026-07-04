@@ -13,7 +13,24 @@ from src.karkard.output import KARKARD_OUTPUT_DIR
 from src.karkard.processor import process_karkard_workbook
 from src.main import app
 
-FIXTURE_XLSX = Path(__file__).resolve().parent / "fixtures/karkard_sample.xlsx"
+FIXTURE_XLSX = next(
+    (
+        base / "formdocs/ب/کارکرد توسعه کارآفرینی-2.1405.xlsx"
+        for base in (
+            Path(__file__).resolve().parents[2],
+            Path(__file__).resolve().parents[1],
+        )
+        if (base / "formdocs/ب/کارکرد توسعه کارآفرینی-2.1405.xlsx").is_file()
+    ),
+    Path(__file__).resolve().parents[2] / "formdocs/ب/کارکرد توسعه کارآفرینی-2.1405.xlsx",
+)
+FIXTURE_FALLBACK = Path(__file__).resolve().parent / "fixtures/karkard_sample.xlsx"
+
+
+def _fixture_xlsx() -> Path:
+    if FIXTURE_XLSX.is_file():
+        return FIXTURE_XLSX
+    return FIXTURE_FALLBACK
 
 
 @pytest.fixture(scope="module")
@@ -32,10 +49,10 @@ def auth_headers(client: TestClient):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-@pytest.mark.skipif(not FIXTURE_XLSX.is_file(), reason="formdocs fixture missing")
+@pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="formdocs fixture missing")
 def test_process_karkard_workbook_columns(tmp_path: Path):
     out_dir = tmp_path / "out"
-    out_path = process_karkard_workbook(FIXTURE_XLSX, out_dir)
+    out_path = process_karkard_workbook(_fixture_xlsx(), out_dir)
     assert out_path.is_file()
 
     wb = load_workbook(out_path, data_only=True)
@@ -58,7 +75,7 @@ def test_process_karkard_workbook_columns(tmp_path: Path):
     assert any("کسرکار" in h or "تاخیر" in h for h in headers)
 
 
-@pytest.mark.skipif(not FIXTURE_XLSX.is_file(), reason="formdocs fixture missing")
+@pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="formdocs fixture missing")
 def test_karkard_tool_registered():
     import src.agents_lib.custom_tools  # noqa: F401
     from src.agents_lib.tool_registry import ToolRegistry
@@ -66,7 +83,7 @@ def test_karkard_tool_registered():
     assert "karkard_process" in ToolRegistry.list_slugs()
 
 
-@pytest.mark.skipif(not FIXTURE_XLSX.is_file(), reason="formdocs fixture missing")
+@pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="formdocs fixture missing")
 def test_karkard_agent_action_flow(
     client: TestClient,
     auth_headers: dict,
@@ -121,7 +138,7 @@ def test_karkard_agent_action_flow(
     assert create.status_code == 201, create.text
     agent_id = create.json()["id"]
 
-    with FIXTURE_XLSX.open("rb") as fh:
+    with _fixture_xlsx().open("rb") as fh:
         upload = client.post(
             f"/api/v1/agents/{agent_id}/files",
             headers=auth_headers,
@@ -142,13 +159,14 @@ def test_karkard_agent_action_flow(
     )
     assert run.status_code == 200, run.text
     body = run.json()
-    assert "download_path" in body["output"] or "karkard" in body["output"]
-    assert "/api/v1/demo-files/karkard/" in body["output"]
+    output = body["output"]
+    assert "download_path" in output or "karkard" in output or "/workspace/" in output
+    assert "/api/v1/agents/" in output and "/workspace/" in output
 
     agent_dir = Path("var/agent_files") / agent_id
-    files = list(agent_dir.glob("karkard-*-processed.xlsx")) if agent_dir.is_dir() else []
+    files = list(agent_dir.glob("karkard-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].xlsx")) if agent_dir.is_dir() else []
     if not files:
-        files = list(tmp_path.glob("karkard-*-processed.xlsx"))
+        files = list(tmp_path.glob("karkard-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].xlsx"))
     assert files, "expected processed xlsx beside upload or in output dir"
     assert files[-1].stat().st_size > 1000
 

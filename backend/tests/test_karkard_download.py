@@ -10,7 +10,14 @@ from fastapi.testclient import TestClient
 
 from src.main import app
 
-FIXTURE_XLSX = Path(__file__).resolve().parent / "fixtures/karkard_sample.xlsx"
+FIXTURE_XLSX = Path(__file__).resolve().parents[2] / "formdocs/ب/کارکرد توسعه کارآفرینی-2.1405.xlsx"
+FIXTURE_FALLBACK = Path(__file__).resolve().parent / "fixtures/karkard_sample.xlsx"
+
+
+def _fixture_xlsx() -> Path:
+    if FIXTURE_XLSX.is_file():
+        return FIXTURE_XLSX
+    return FIXTURE_FALLBACK
 
 
 @pytest.fixture
@@ -29,7 +36,7 @@ def auth_headers(client: TestClient):
     return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-@pytest.mark.skipif(not FIXTURE_XLSX.is_file(), reason="karkard fixture missing")
+@pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="karkard fixture missing")
 def test_karkard_download_from_agent_files_dir(
     client: TestClient, auth_headers: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -80,7 +87,7 @@ def test_karkard_download_from_agent_files_dir(
     assert create.status_code == 201
     agent_id = create.json()["id"]
 
-    with FIXTURE_XLSX.open("rb") as fh:
+    with _fixture_xlsx().open("rb") as fh:
         upload = client.post(
             f"/api/v1/agents/{agent_id}/files",
             headers=auth_headers,
@@ -100,13 +107,17 @@ def test_karkard_download_from_agent_files_dir(
         json={"variables": {"jalali_year": 1405}},
     )
     assert run.status_code == 200, run.text
-    assert "/api/v1/demo-files/karkard/" in run.json()["output"]
+    output = run.json()["output"]
+    assert "/api/v1/agents/" in output and "/workspace/" in output
 
     agent_dir = Path("var/agent_files") / agent_id
-    processed = list(agent_dir.glob("karkard-*-processed.xlsx"))
+    processed = list(agent_dir.glob("karkard-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].xlsx"))
     assert processed, "output should live next to upload"
     name = processed[0].name
 
-    dl = client.get(f"/api/v1/demo-files/karkard/{name}", headers=auth_headers)
+    dl = client.get(
+        f"/api/v1/agents/{agent_id}/workspace/{name}",
+        headers=auth_headers,
+    )
     assert dl.status_code == 200
     assert "spreadsheetml" in dl.headers.get("content-type", "")

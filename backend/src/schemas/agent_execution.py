@@ -17,6 +17,26 @@ class AgentExecutionTemplateRef(BaseModel):
     body: str
 
 
+class AgentExecutionTestStep(BaseModel):
+    kind: str
+    label: str
+    description: str
+    action_slug: str | None = None
+    prompt: str | None = None
+
+
+class AgentExecutionGuideStatusRead(BaseModel):
+    """Background LLM guide generation progress after agent edits."""
+
+    state: str = Field(
+        description="idle | generating | ready | failed",
+    )
+    source: str | None = Field(
+        default=None,
+        description="llm | rule | cached when state is ready",
+    )
+
+
 class AgentExecutionRead(BaseModel):
     profile: str
     domain_label: str
@@ -30,3 +50,5 @@ class AgentExecutionRead(BaseModel):
     actions: list[AgentExecutionActionRef] = Field(default_factory=list)
     templates: list[AgentExecutionTemplateRef] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
+    test_steps: list[AgentExecutionTestStep] = Field(default_factory=list)
+    guide_source: str = "rule"

@@ -13,6 +13,7 @@ PRICING: dict[str, tuple[Decimal, Decimal]] = {
     "claude-3-5-sonnet": (Decimal("0.003"), Decimal("0.015")),
     "claude-3-haiku":    (Decimal("0.00025"), Decimal("0.00125")),
     "claude-opus-4-7":   (Decimal("0.015"), Decimal("0.075")),
+    "claude-opus-4-8":   (Decimal("0.015"), Decimal("0.075")),
 }
 
 DEFAULT = (Decimal("0.001"), Decimal("0.002"))

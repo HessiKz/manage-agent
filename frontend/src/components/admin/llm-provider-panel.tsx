@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, Radio, Server, Sparkles, XCircle } from "lucide-react";
+import { CheckCircle2, Radio, Server, Sparkles, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import {
   type LlmProviderId,
 } from "@/lib/api";
 import { appAlert, appConfirm } from "@/lib/app-dialog";
+import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 
 type ProviderChoice = {
   id: LlmProviderId;
@@ -125,7 +126,7 @@ export function LlmProviderPanel() {
       <CardBody>
         {busy && !provider ? (
           <div className="flex items-center justify-center gap-2 py-8 text-stone-500">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+            <LoadingSpinner />
             در حال بارگذاری…
           </div>
         ) : (
@@ -262,7 +263,7 @@ export function LlmProviderPanel() {
               <Button onClick={handleSave} disabled={saveMutation.isPending}>
                 {saveMutation.isPending ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    <LoadingSpinner />
                     در حال ذخیره…
                   </>
                 ) : (

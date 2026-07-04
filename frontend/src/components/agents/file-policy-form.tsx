@@ -17,7 +17,11 @@ export function validateFilePolicy(policy: AgentFilePolicy): string | null {
   if (policy.max_file_size_mb > policy.max_total_size_mb) {
     return "حداکثر حجم هر فایل نباید از کل سقف بیشتر باشد";
   }
-  if (!policy.allowed_mime_types.length && !policy.allowed_extensions.length) {
+  if (
+    !policy.allow_all_types &&
+    !policy.allowed_mime_types.length &&
+    !policy.allowed_extensions.length
+  ) {
     return "حداقل یک نوع فایل مجاز انتخاب کنید";
   }
   return null;

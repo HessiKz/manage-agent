@@ -21,6 +21,7 @@ class PromptSuggestRequest(BaseModel):
     tool_names: list[str] = Field(default_factory=list)
     capabilities: dict[str, bool] | None = None
     existing_prompt: str | None = None
+    instruction_files: list[str] = Field(default_factory=list)
     locale: str = "fa"
 
 

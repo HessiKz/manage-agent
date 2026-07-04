@@ -87,7 +87,7 @@ function AgentsListContent() {
 
 export default function AgentsListPage() {
   return (
-    <div className="space-y-6 p-6">
+    <div className="page-padding space-y-6">
       <Suspense fallback={<p className="text-stone-400">بارگذاری ایجنت‌ها…</p>}>
         <AgentsListContent />
       </Suspense>

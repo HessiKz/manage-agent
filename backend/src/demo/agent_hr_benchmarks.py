@@ -178,3 +178,65 @@ def compute_hr_savings(profile_key: str, stats: dict[str, int | float]) -> dict[
         "savings_percent": min(99, savings_pct),
         "usd_to_irr_rate": USD_TO_IRR,
     }
+
+
+def aggregate_platform_hr_savings(
+    per_agent: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Sum HR savings across agents for the main workspace dashboard."""
+    if not per_agent:
+        bench = _PROFILE_BENCHMARKS["generic_chat"]
+        demo = compute_hr_savings("generic_chat", {"total": 0})
+        demo["role_title"] = "منابع انسانی معادل (کل سازمان)"
+        demo["period_label"] = "برآورد ماهانه (نمونه)"
+        demo["agent_count"] = 0
+        return demo
+
+    human_cost = 0.0
+    agent_cost = 0.0
+    human_hours = 0.0
+    agent_hours = 0.0
+    time_saved = 0.0
+    money_saved = 0.0
+    runs = 0
+    tokens = 0
+    uses_live = False
+
+    for row in per_agent:
+        human_cost += float(row.get("human_cost_irr") or 0)
+        agent_cost += float(row.get("agent_cost_irr") or 0)
+        human_hours += float(row.get("human_hours") or 0)
+        agent_hours += float(row.get("agent_hours") or 0)
+        time_saved += float(row.get("time_saved_hours") or 0)
+        money_saved += float(row.get("money_saved_irr") or 0)
+        runs += int(row.get("run_count") or 0)
+        tokens += int(row.get("tokens_total") or 0)
+        if row.get("uses_live_activity"):
+            uses_live = True
+
+    savings_pct = int(round(100 * money_saved / human_cost)) if human_cost > 0 else 0
+
+    return {
+        "role_title": "منابع انسانی معادل (کل سازمان)",
+        "period_label": "۳۰ روز اخیر · همه ایجنت‌ها" if uses_live else "برآورد ماهانه (نمونه)",
+        "uses_live_activity": uses_live,
+        "run_count": runs,
+        "tokens_total": tokens,
+        "agent_count": len(per_agent),
+        "employee_monthly_salary_irr": 0,
+        "employee_hourly_irr": 0,
+        "human_hours": round(human_hours, 2),
+        "human_hours_label": _format_hours(human_hours),
+        "human_cost_irr": int(round(human_cost)),
+        "human_cost_label": _format_irr(human_cost),
+        "agent_hours": round(agent_hours, 2),
+        "agent_hours_label": _format_hours(agent_hours),
+        "agent_cost_irr": int(round(agent_cost)),
+        "agent_cost_label": _format_irr(agent_cost),
+        "time_saved_hours": round(time_saved, 2),
+        "time_saved_label": _format_hours(time_saved),
+        "money_saved_irr": int(round(money_saved)),
+        "money_saved_label": _format_irr(money_saved),
+        "savings_percent": min(99, savings_pct),
+        "usd_to_irr_rate": USD_TO_IRR,
+    }

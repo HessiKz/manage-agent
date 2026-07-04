@@ -103,7 +103,7 @@ class Agent(Base, UUIDPkMixin, TimestampMixin):
 
     # LLM
     model_provider: Mapped[str] = mapped_column(String(50), default="openai", nullable=False)
-    model_name: Mapped[str] = mapped_column(String(100), default="auto", nullable=False)
+    model_name: Mapped[str] = mapped_column(String(100), default="claude-opus-4-8", nullable=False)
     temperature: Mapped[float] = mapped_column(Numeric(3, 2), default=0.2, nullable=False)
     max_iterations: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
 
@@ -174,6 +174,11 @@ class Agent(Base, UUIDPkMixin, TimestampMixin):
         back_populates="callee",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def links(self) -> list["AgentLink"]:
+        """Alias for API schemas (`AgentDetailRead.links`)."""
+        return self.outgoing_links
 
     def __repr__(self) -> str:
         return f"<Agent {self.slug} status={self.status.value}>"

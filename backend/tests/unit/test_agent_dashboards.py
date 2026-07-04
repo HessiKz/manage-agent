@@ -28,3 +28,24 @@ def test_payroll_profile_domain_kpis():
     assert payroll["profile"] == "payroll"
     labels = {c["label"] for c in payroll["stat_cards"]}
     assert "کل کارمندان" in labels or "جمع پرداختی" in labels
+
+
+def test_generic_chat_custom_agent_uses_name():
+    custom = _agent("yjnt-pshtybny-hwshmnd", department="ops")
+    custom.name = "ایجنت هوشمند سازمان"
+    dash = base_dashboard_for_agent(custom)
+    assert dash["profile"] == "generic_chat"
+    assert custom.name[:20] in dash["stat_cards"][2]["hint"]
+
+
+def test_month_end_inspector_not_resume_profile():
+    agent = _agent("bazras-payane-mah", department="hr")
+    agent.name = "بازرس پایان ماه"
+    agent.description = "کنترل و بستن دوره مالی"
+    assert resolve_profile_key(agent) == "invoice"
+
+
+def test_hr_department_without_resume_keywords_defaults_karkard():
+    agent = _agent("custom-hr-ops", department="hr")
+    agent.name = "هماهنگ‌کننده منابع انسانی"
+    assert resolve_profile_key(agent) == "karkard"

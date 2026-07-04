@@ -17,6 +17,7 @@ from src.models.budget import Budget, BudgetPeriod
 from src.models.dashboard import DashboardConfig
 from src.models.permission import Permission, Role, role_permissions, user_roles
 from src.models.document_chunk import DocumentChunk
+from src.models.knowledge_dataset import KnowledgeDataset
 from src.models.external_api import ExternalApiEndpoint, ExternalApiService
 from src.models.notification import Notification
 from src.models.platform_setting import PlatformSetting
@@ -49,4 +50,5 @@ __all__ = [
     "ExternalApiService",
     "ExternalApiEndpoint",
     "DocumentChunk",
+    "KnowledgeDataset",
 ]

@@ -1,12 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload, Loader2 } from "lucide-react";
-import { fetchAgentFiles, uploadAgentFile } from "@/lib/api";
+import { Upload, X } from "lucide-react";
+import { deleteAgentFile, fetchAgentFiles, uploadAgentFile } from "@/lib/api";
 import { getErrorMessage } from "@/lib/errors";
+import { validateFileAgainstPolicy, filePolicyAcceptAttr, filePolicyTypeHint } from "@/lib/file-policy-utils";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
-import type { Agent, AgentFilePolicy } from "@/types";
+import type { AgentFilePolicy } from "@/types";
+import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 
 type Props = {
   agentId: string;
@@ -14,21 +16,14 @@ type Props = {
 };
 
 function clientValidate(file: File, policy: AgentFilePolicy): string | null {
-  const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
-  const mimeOk = policy.allowed_mime_types.includes(file.type);
-  const extOk = policy.allowed_extensions.some(
-    (e) => e.toLowerCase() === ext || e.toLowerCase() === ext.replace(/^\./, "")
-  );
-  if (!mimeOk && !extOk) return "نوع فایل مجاز نیست";
-  const mb = file.size / (1024 * 1024);
-  if (mb > policy.max_file_size_mb) return `حجم فایل بیش از ${policy.max_file_size_mb}MB است`;
-  return null;
+  return validateFileAgainstPolicy(file, policy);
 }
 
 export function FileIntakePanel({ agentId, filePolicy }: Props) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data: files = [] } = useQuery({
     queryKey: ["agent-files", agentId],
@@ -60,7 +55,20 @@ export function FileIntakePanel({ agentId, filePolicy }: Props) {
     }
   }
 
-  const policyHint = `${filePolicy.allowed_extensions.join("، ")} · ${filePolicy.min_files}–${filePolicy.max_files} فایل · حداکثر ${filePolicy.max_file_size_mb}MB`;
+  async function handleDelete(fileId: string) {
+    setError(null);
+    setDeletingId(fileId);
+    try {
+      await deleteAgentFile(agentId, fileId);
+      await qc.invalidateQueries({ queryKey: ["agent-files", agentId] });
+    } catch (e: unknown) {
+      setError(getErrorMessage(e));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  const policyHint = `${filePolicyTypeHint(filePolicy)} · ${filePolicy.min_files}–${filePolicy.max_files} فایل · حداکثر ${filePolicy.max_file_size_mb}MB`;
 
   return (
     <div className="space-y-4">
@@ -71,7 +79,7 @@ export function FileIntakePanel({ agentId, filePolicy }: Props) {
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-100 text-brand-700">
               {uploading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
+                <LoadingSpinner />
               ) : (
                 <Upload className="h-5 w-5" />
               )}
@@ -88,6 +96,7 @@ export function FileIntakePanel({ agentId, filePolicy }: Props) {
             type="file"
             multiple
             className="hidden"
+            accept={filePolicyAcceptAttr(filePolicy)}
             onChange={(e) => handleFiles(e.target.files)}
           />
         </label>
@@ -97,9 +106,24 @@ export function FileIntakePanel({ agentId, filePolicy }: Props) {
       <Stagger initial={false} className="space-y-2">
         {files.map((f) => (
           <StaggerItem key={f.id} variant="slideRight">
-            <div className="flex items-center justify-between rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs">
-              <span className="truncate font-semibold text-stone-700">{f.filename}</span>
-              <span className="text-stone-400">{Math.round(f.size_bytes / 1024)}KB</span>
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs">
+              <span className="min-w-0 truncate font-semibold text-stone-700">{f.filename}</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="text-stone-400">{Math.round(f.size_bytes / 1024)}KB</span>
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-stone-400 hover:bg-stone-100 hover:text-accent-red disabled:opacity-50"
+                  onClick={() => void handleDelete(f.id)}
+                  disabled={deletingId === f.id || uploading}
+                  aria-label={`حذف ${f.filename}`}
+                >
+                  {deletingId === f.id ? (
+                    <LoadingSpinner />
+                  ) : (
+                    <X className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
             </div>
           </StaggerItem>
         ))}

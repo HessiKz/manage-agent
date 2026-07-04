@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { MessageSquare, RotateCcw } from "lucide-react";
 import { fetchConversations } from "@/lib/api";
+import { SUPPORT_AGENT_SLUG } from "@/lib/support-chat";
 import { Card, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ClientDateTime } from "@/components/ui/client-date";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
+import { plainTextOutputPreview, plainTextUserPreview } from "@/lib/plain-text-preview";
 
 export default function ConversationsPage() {
   const { data: items = [], isLoading } = useQuery({
@@ -15,8 +17,10 @@ export default function ConversationsPage() {
     queryFn: fetchConversations,
   });
 
+  const workspaceConversations = items.filter((c) => c.agent_slug !== SUPPORT_AGENT_SLUG);
+
   return (
-    <Stagger initial={false} className="space-y-6 p-6" delayChildren={0.03} staggerChildren={0.05}>
+    <Stagger initial={false} className="page-padding space-y-6" delayChildren={0.03} staggerChildren={0.05}>
       <StaggerItem variant="slideUp">
         <div>
           <h1 className="text-2xl font-bold text-stone-900">گفت‌وگوها</h1>
@@ -33,7 +37,7 @@ export default function ConversationsPage() {
       )}
 
       <Stagger delayChildren={0.04} staggerChildren={0.05} className="grid gap-3">
-        {items.map((c) => (
+        {workspaceConversations.map((c) => (
           <StaggerItem key={c.id} variant="slideRight">
             <Card className="transition hover:border-brand-200 hover:shadow-glow">
               <CardBody className="flex items-center gap-4">
@@ -52,10 +56,12 @@ export default function ConversationsPage() {
                       </Badge>
                     </div>
                   </div>
-                  <p className="mt-1 truncate text-sm text-stone-600">{c.preview}</p>
+                  <p className="mt-1 truncate text-sm text-stone-600">
+                    {plainTextUserPreview(c.preview ?? "")}
+                  </p>
                   {c.output_preview && (
                     <p className="mt-0.5 truncate text-xs text-stone-500">
-                      پاسخ: {c.output_preview}
+                      پاسخ: {plainTextOutputPreview(c.output_preview)}
                     </p>
                   )}
                   <p className="mt-1 text-xs text-stone-400">
@@ -73,7 +79,7 @@ export default function ConversationsPage() {
             </Card>
           </StaggerItem>
         ))}
-        {!isLoading && items.length === 0 && (
+        {!isLoading && workspaceConversations.length === 0 && (
           <StaggerItem variant="fadeIn">
             <Card>
               <CardBody className="text-center text-stone-400">

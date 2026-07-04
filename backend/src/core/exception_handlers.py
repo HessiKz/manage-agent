@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import settings
-from src.core.error_response import error_response, get_request_id, user_message
+from src.core.error_response import error_response, get_request_id, user_message, looks_user_facing
 from src.core.errors import STATUS_MESSAGE_FA, AppError, ErrorCode, STATUS_TO_CODE
 from src.logger import get_logger, log_exception
 from src.schemas.errors import FieldError
@@ -124,6 +124,32 @@ async def validation_exception_handler(
     )
 
 
+async def file_not_found_handler(request: Request, exc: FileNotFoundError) -> Any:
+    message = str(exc) or STATUS_MESSAGE_FA[404]
+    if looks_user_facing(message):
+        status = 422
+        code = ErrorCode.UNPROCESSABLE
+        level = "warning"
+    else:
+        status = 404
+        code = ErrorCode.NOT_FOUND
+        level = "info"
+    getattr(log, level)(
+        "client.file_error",
+        status=status,
+        code=code.value,
+        message=message,
+        path=request.url.path,
+        request_id=get_request_id(request),
+    )
+    return error_response(
+        status_code=status,
+        message=message,
+        code=code,
+        request=request,
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> Any:
     log_exception(
         log,
@@ -154,4 +180,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(FileNotFoundError, file_not_found_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

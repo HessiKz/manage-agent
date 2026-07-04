@@ -7,9 +7,12 @@
 type UiState = {
   viewMode: ViewMode;
   loggingOut: boolean;
+  mobileNavOpen: boolean;
   setViewMode: (mode: ViewMode) => void;
   toggleViewMode: () => void;
   setLoggingOut: (value: boolean) => void;
+  setMobileNavOpen: (open: boolean) => void;
+  closeMobileNav: () => void;
 };
  
  const STORAGE_KEY = "ma_view_mode";
@@ -25,6 +28,7 @@ export function hydrateViewModeFromStorage(): void {
 export const useUiStore = create<UiState>((set, get) => ({
   viewMode: "workspace",
   loggingOut: false,
+  mobileNavOpen: false,
   setViewMode: (mode) => {
      set({ viewMode: mode });
      if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, mode);
@@ -34,4 +38,6 @@ export const useUiStore = create<UiState>((set, get) => ({
     get().setViewMode(next);
   },
   setLoggingOut: (value) => set({ loggingOut: value }),
+  setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
+  closeMobileNav: () => set({ mobileNavOpen: false }),
 }));

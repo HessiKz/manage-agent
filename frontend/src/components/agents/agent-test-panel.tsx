@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, ChevronUp, FlaskConical, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, FlaskConical, XCircle } from "lucide-react";
 import { AgentExecutionTrace } from "@/components/agents/agent-execution-trace";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import {
   fetchAgentActions,
+  fetchAgentExecution,
   fetchAgentFiles,
   fetchAgentLinkGraph,
   fetchAgentTemplates,
@@ -16,14 +17,21 @@ import {
   runAgentAction,
   uploadAgentFile,
 } from "@/lib/api";
+import { displayAgentFileName, isRuntimeSampleFileName } from "@/lib/agent-file-roles";
 import {
   buildAgentTestPlan,
+  buildSampleFile,
+  policyPrefersXlsx,
+  resolveKarkardSampleFile,
+  sampleVariablesForAction,
   type AgentTestStepPlan,
 } from "@/lib/agent-test-fixtures";
-import { extractDownloadUrls } from "@/lib/download-url";
+import { downloadFileWithAuth, extractDownloadUrls } from "@/lib/download-url";
+import { showErrorToast } from "@/lib/toast-errors";
 import { formatAssistantOutput } from "@/lib/sanitize-chat-message";
 import { getErrorMessage } from "@/lib/errors";
 import type { Agent, ExecutionTraceStep, InvokeResponse } from "@/types";
+import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 
 type StepStatus = "pending" | "running" | "ok" | "fail" | "skip";
 
@@ -82,10 +90,55 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
     enabled: agent.capabilities?.file_upload_enabled,
   });
 
-  const plan = useMemo(
-    () => buildAgentTestPlan(agent, actions, templates, existingFiles),
-    [agent, actions, templates, existingFiles]
-  );
+  const { data: guide } = useQuery({
+    queryKey: ["agent-execution", agent.id],
+    queryFn: () => fetchAgentExecution(agent.id),
+    staleTime: 5 * 60_000,
+  });
+
+  const plan = useMemo(() => {
+    const runtimeFiles = existingFiles.filter((f) => isRuntimeSampleFileName(f.filename));
+    if (guide?.test_steps?.length) {
+      return guide.test_steps.map((s) => {
+        const step: AgentTestStepPlan = {
+          kind: s.kind as AgentTestStepPlan["kind"],
+          label: s.label,
+          description: s.description,
+          actionSlug: s.action_slug ?? undefined,
+          prompt: s.prompt ?? undefined,
+        };
+        if (s.kind === "action") {
+          const act =
+            actions.find((a) => a.slug === s.action_slug) ?? actions[0];
+          if (act) {
+            step.actionSlug = act.slug;
+            step.variables = sampleVariablesForAction(act);
+          }
+        }
+        if (s.kind === "upload" && agent.file_policy) {
+          const policy = agent.file_policy;
+          const alreadyHas =
+            runtimeFiles.length > 0 &&
+            (!policyPrefersXlsx(policy) ||
+              runtimeFiles.some((f) => /\.xlsx?$/i.test(f.filename)));
+          if (alreadyHas) {
+            return {
+              kind: "info" as const,
+              label: "فایل نمونه از قبل موجود",
+              description: `${displayAgentFileName(runtimeFiles[0].filename)} — آپلود مجدد لازم نیست.`,
+            };
+          }
+          if (policyPrefersXlsx(policy)) {
+            step.resolveFile = resolveKarkardSampleFile;
+          } else {
+            step.file = buildSampleFile(policy);
+          }
+        }
+        return step;
+      });
+    }
+    return buildAgentTestPlan(agent, actions, templates, runtimeFiles);
+  }, [guide, agent, actions, templates, existingFiles]);
 
   async function runStep(
     step: AgentTestStepPlan,
@@ -210,7 +263,7 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
           disabled={running || !hasRunnable}
         >
           {running ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingSpinner />
           ) : (
             <FlaskConical className="h-4 w-4" />
           )}
@@ -226,7 +279,7 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
                   <div className="flex gap-2">
                     <span className="mt-0.5 shrink-0">
                       {s.status === "running" && (
-                        <Loader2 className="h-4 w-4 animate-spin text-brand-600" />
+                        <LoadingSpinner />
                       )}
                       {s.status === "ok" && (
                         <CheckCircle2 className="h-4 w-4 text-accent-green" />
@@ -251,16 +304,18 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
                       <p className="text-stone-500">{s.detail ?? s.plan.description}</p>
                       {s.detail &&
                         extractDownloadUrls(s.detail).map((url, urlIdx) => (
-                          <a
+                          <button
                             key={`${i}-dl-${urlIdx}-${url}`}
-                            href={url}
-                            download
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            type="button"
                             className="mt-1 inline-block text-xs font-semibold text-brand-700 underline"
+                            onClick={() =>
+                              downloadFileWithAuth(url).catch((err) =>
+                                showErrorToast(err, "دانلود فایل")
+                              )
+                            }
                           >
                             دانلود نتیجه
-                          </a>
+                          </button>
                         ))}
                       {(s.trace?.length ?? 0) > 0 && (
                         <div className="mt-2">

@@ -10,7 +10,13 @@ from sqlalchemy import delete, select
 from src.config import settings
 from src.core.security import hash_password
 from src.database.full_catalog import FULL_AGENT_CATALOG
-from src.demo.datasets import AGENT_DEMO_SNIPPETS, demo_context_for_slug
+from src.agents_lib.platform_constants import PLATFORM_SUPPORT_TOOL_NAMES
+from src.services.catalog_agent_upgrade_service import (
+    CATALOG_SCHEMA_VERSION,
+    ensure_catalog_actions_templates,
+    upgrade_catalog_agents,
+    widget_plan_for_catalog_entry,
+)
 from src.database.session import async_session_maker
 from src.models.access_request import AccessRequest, AccessRequestStatus
 from src.models.agent import Agent, AgentKind, AgentStatus
@@ -119,8 +125,14 @@ async def seed_demo_workspace_files(db, by_slug: dict) -> None:
         base_dir = Path("var/agent_files") / str(ag.id)
         base_dir.mkdir(parents=True, exist_ok=True)
         if ag.slug == "example-karkard":
-            src = Path(__file__).resolve().parents[2] / "tests/fixtures/karkard_sample.xlsx"
-            if src.is_file():
+            repo_root = Path(__file__).resolve().parents[3]
+            src_candidates = [
+                repo_root / "formdocs" / "کارکرد_توسعه_کارآفرینی_1405.2.xlsx",
+                repo_root / "frontend" / "public" / "samples" / "karkard-raw.xlsx",
+                Path(__file__).resolve().parents[2] / "tests/fixtures/karkard_sample.xlsx",
+            ]
+            src = next((p for p in src_candidates if p.is_file()), None)
+            if src and src.is_file():
                 name = "demo-karkard-raw.xlsx"
                 mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 body = src.read_bytes()
@@ -196,6 +208,16 @@ async def seed_agents_from_catalog(db) -> dict[str, Agent]:
             for k, v in cfg.items()
             if k not in ("actions", "templates", "link_specs", "api_bind_slugs")
         }
+        cfg_json = dict(data.get("config_json") or {})
+        cfg_json["widget_plan"] = widget_plan_for_catalog_entry(cfg)
+        cfg_json["_catalog_version"] = CATALOG_SCHEMA_VERSION
+        cfg_json.setdefault("validation", {})
+        cfg_json["validation"].setdefault("state", "done")
+        cfg_json["validation"].setdefault("training_completed", True)
+        data["config_json"] = cfg_json
+        data["system_prompt"] = demo_context_for_slug(cfg["slug"])
+        if cfg["slug"] == "support":
+            data["tool_names"] = list(PLATFORM_SUPPORT_TOOL_NAMES)
         ag = Agent(
             status=AgentStatus.ACTIVE,
             model_provider="openai",
@@ -380,6 +402,11 @@ async def seed(
                         )
                     )
                     print("✅ Sample pending access request")
+        else:
+            n = await upgrade_catalog_agents(db)
+            tpl = await ensure_catalog_actions_templates(db)
+            if n or tpl:
+                print(f"🔄 Catalog sync: {n} agents updated, {tpl} actions/templates added")
 
         if refresh_aux or reset_agents:
             await db.execute(delete(AuditLog))

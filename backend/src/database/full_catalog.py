@@ -68,8 +68,9 @@ FULL_AGENT_CATALOG: list[dict[str, Any]] = [
             "allowed_mime_types": [
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/vnd.ms-excel",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ],
-            "allowed_extensions": [".xlsx", ".xls"],
+            "allowed_extensions": [".xlsx", ".xls", ".docx"],
             "require_files_to_invoke": False,
             "auto_ingest_to_rag": False,
         },
@@ -483,7 +484,13 @@ FULL_AGENT_CATALOG: list[dict[str, Any]] = [
             "require_files_to_invoke": False,
             "auto_ingest_to_rag": False,
         },
-        "tool_names": ["crm_lookup"],
+        "tool_names": [
+            "crm_lookup",
+            "platform_list_agents",
+            "platform_create_agent",
+            "platform_generate_widget",
+            "platform_ui_action",
+        ],
         "templates": [
             {"slug": "close_ticket", "label": "بستن تیکت", "body": "پاسخ پیشنهادی برای بستن تیکت", "order_index": 0},
         ],

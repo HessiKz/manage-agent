@@ -27,6 +27,7 @@ class AgentFilePolicy(BaseModel):
     allowed_extensions: list[str] = Field(default_factory=lambda: [".pdf", ".txt", ".csv"])
     require_files_to_invoke: bool = False
     auto_ingest_to_rag: bool = True
+    allow_all_types: bool = False
 
     @model_validator(mode="after")
     def validate_ranges(self) -> AgentFilePolicy:
@@ -55,7 +56,7 @@ KIND_PRESETS: dict[AgentKind, AgentCapabilities] = {
         chat_enabled=False,
         file_upload_enabled=False,
         actions_enabled=True,
-        templates_enabled=True,
+        templates_enabled=False,
         can_call_agents=False,
         supervisor_enabled=False,
     ),
@@ -67,8 +68,51 @@ KIND_PRESETS: dict[AgentKind, AgentCapabilities] = {
         can_call_agents=False,
         supervisor_enabled=True,
     ),
-    AgentKind.CUSTOM: AgentCapabilities(),
+    AgentKind.CUSTOM: AgentCapabilities(
+        supervisor_enabled=False,
+    ),
 }
+
+
+def clamp_capabilities_for_kind(kind: AgentKind, caps: AgentCapabilities | dict) -> dict:
+    """Enforce per-kind capability locks (worker ≠ supervisor, etc.)."""
+    if isinstance(caps, AgentCapabilities):
+        data = caps.model_dump()
+    else:
+        data = dict(caps)
+
+    canonical = canonical_agent_kind(kind)
+    preset = KIND_PRESETS.get(canonical, AgentCapabilities()).model_dump()
+    merged = {**preset, **{k: v for k, v in data.items() if v is not None}}
+
+    if canonical != AgentKind.SUPERVISOR:
+        merged["supervisor_enabled"] = False
+
+    if canonical == AgentKind.WORKER:
+        merged["chat_enabled"] = False
+        merged["can_call_agents"] = False
+        merged["templates_enabled"] = False
+
+    if canonical == AgentKind.SUPERVISOR:
+        merged["supervisor_enabled"] = True
+        merged["chat_enabled"] = True
+        merged["can_call_agents"] = False
+        merged["actions_enabled"] = False
+        merged["templates_enabled"] = False
+
+    if merged.get("supervisor_enabled"):
+        merged["can_call_agents"] = False
+
+    return merged
+
+
+def capabilities_for_kind(kind: AgentKind, overrides: dict | None = None) -> dict:
+    canonical = canonical_agent_kind(kind)
+    base = KIND_PRESETS.get(canonical, AgentCapabilities()).model_dump()
+    if overrides:
+        base.update({k: v for k, v in overrides.items() if v is not None})
+    return clamp_capabilities_for_kind(kind, base)
+
 
 # Capability-driven file policies (not separate agent kinds).
 FILE_POLICY_BULK_INTAKE = AgentFilePolicy(
@@ -92,14 +136,6 @@ FILE_POLICY_SPREADSHEET = AgentFilePolicy(
     allowed_extensions=[".xlsx", ".xls"],
     auto_ingest_to_rag=False,
 )
-
-
-def capabilities_for_kind(kind: AgentKind, overrides: dict | None = None) -> dict:
-    canonical = canonical_agent_kind(kind)
-    base = KIND_PRESETS.get(canonical, AgentCapabilities()).model_dump()
-    if overrides:
-        base.update({k: v for k, v in overrides.items() if v is not None})
-    return base
 
 
 def file_policy_for_kind(kind: AgentKind, overrides: dict | None = None) -> dict:

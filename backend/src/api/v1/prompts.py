@@ -109,6 +109,7 @@ async def suggest_prompt(payload: PromptSuggestRequest, _admin: CurrentSuperuser
         "chat agents are conversational but still actionable.\n"
         "- If tools are listed, instruct the agent to actually invoke them when relevant.\n"
         "- If file upload is enabled, tell the agent to use uploaded files, not ask the user to re-upload.\n"
+        "- If instruction file content is provided, treat it as authoritative business rules and include concrete details.\n"
         "- Keep it 120–220 words, professional, specific to the use case.\n"
         "- Preserve any useful intent from existing_prompt if provided.\n"
         "- Do NOT add generic filler like 'پاسخ‌ها کوتاه و رسمی باشند' unless it fits the role."
@@ -125,6 +126,11 @@ async def suggest_prompt(payload: PromptSuggestRequest, _admin: CurrentSuperuser
         user_parts.append(f"توضیح: {payload.description.strip()}")
     if payload.existing_prompt and payload.existing_prompt.strip():
         user_parts.append(f"متن فعلی (بهبود یا جایگزینی هوشمند):\n{payload.existing_prompt.strip()}")
+    if payload.instruction_files:
+        user_parts.append(
+            "متن استخراج‌شده از فایل‌های دستورالعمل:\n"
+            + "\n\n".join(payload.instruction_files)[:48000]
+        )
 
     result = await llm.ainvoke(
         [{"role": "system", "content": sys}, {"role": "user", "content": "\n".join(user_parts)}]

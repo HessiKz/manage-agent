@@ -9,6 +9,7 @@ import {
   schemaToFields,
   type ActionInputField,
 } from "@/lib/action-inputs";
+import { formatPersianYearMonthNumeric } from "@/lib/persian-date";
 
 type Props = {
   schema: Record<string, unknown>;
@@ -26,6 +27,7 @@ function emptyField(used: Set<string>): ActionInputField {
 
 export function ActionInputsEditor({ schema, onChange }: Props) {
   const fields = schemaToFields(schema);
+  const periodPlaceholder = `مثلاً ${formatPersianYearMonthNumeric()}`;
 
   function updateFields(next: ActionInputField[]) {
     onChange(fieldsToSchema(next));
@@ -85,7 +87,7 @@ export function ActionInputsEditor({ schema, onChange }: Props) {
           <div>
             <label className="mb-1 block text-[10px] font-medium text-stone-500">مقدار پیش‌فرض</label>
             <Input
-              placeholder="مثلاً ۱۴۰۴/۱۲"
+              placeholder={periodPlaceholder}
               value={field.defaultValue ?? ""}
               onChange={(e) => patchField(idx, { defaultValue: e.target.value })}
               className="text-sm"

@@ -118,6 +118,7 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
             aria-modal="true"
             aria-labelledby="app-dialog-title"
             aria-describedby="app-dialog-message"
+            data-ma-support="app-dialog"
             className="relative w-full max-w-md overflow-hidden rounded-3xl border border-stone-200/90 bg-white shadow-2xl"
             variants={panelVariants}
             transition={{ duration: 0.2, ease: easeOut }}
@@ -139,7 +140,11 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
                 <h2 id="app-dialog-title" className="text-lg font-bold text-stone-900">
                   {title}
                 </h2>
-                <p id="app-dialog-message" className="mt-2 text-sm leading-relaxed text-stone-600">
+                <p
+                  id="app-dialog-message"
+                  data-ma-support="app-dialog-message"
+                  className="mt-2 text-sm leading-relaxed text-stone-600"
+                >
                   {dialog.options.message}
                 </p>
               </div>
@@ -169,6 +174,7 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
               ) : (
                 <Button
                   variant={isDanger ? "danger" : "primary"}
+                  data-ma-support="app-dialog-confirm"
                   onClick={() => {
                     dialog.resolve();
                     close();

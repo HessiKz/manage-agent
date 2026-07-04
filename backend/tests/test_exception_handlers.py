@@ -29,6 +29,12 @@ def _client() -> TestClient:
     def boom():
         raise RuntimeError("secret internal")
 
+    @app.get("/missing-file")
+    def missing_file():
+        raise FileNotFoundError(
+            "فایل انتخاب‌شده شبیه نمونه/خروجی نهایی است — فایل خام حضور و غیاب را آپلود کنید."
+        )
+
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -70,3 +76,12 @@ def test_app_error_envelope():
     r = _client().get("/app-error")
     assert r.status_code == 403
     assert r.json()["code"] == "PERMISSION_DENIED"
+
+
+def test_file_not_found_user_facing_returns_422():
+    r = _client().get("/missing-file")
+    assert r.status_code == 422
+    body = r.json()
+    assert body["code"] == "UNPROCESSABLE"
+    assert "نمونه" in body["message"]
+    assert "خطای داخلی" not in body["message"]

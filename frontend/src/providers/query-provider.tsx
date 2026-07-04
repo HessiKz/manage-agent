@@ -7,15 +7,29 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query";
 import { useState } from "react";
+import { handleApiError } from "@/lib/api-error-handler";
 import { parseApiError } from "@/lib/errors";
-import { logApiError } from "@/lib/logger";
-import { showErrorToast } from "@/lib/toast-errors";
 import { MotionProvider } from "./motion-provider";
 
 function shouldToastQueryError(error: unknown): boolean {
   const apiErr = parseApiError(error);
-  if (apiErr.status === 401) return false;
+  if (apiErr.status === 401 || apiErr.status === 403 || apiErr.status === 0) return false;
   return true;
+}
+
+function shouldLogQueryError(error: unknown): boolean {
+  const apiErr = parseApiError(error);
+  if (apiErr.status === 401 || apiErr.status === 403 || apiErr.status === 0) return false;
+  return true;
+}
+
+function metaSuppressesToast(meta: unknown): boolean {
+  return Boolean(
+    meta &&
+      typeof meta === "object" &&
+      "suppressErrorToast" in meta &&
+      (meta as { suppressErrorToast?: boolean }).suppressErrorToast
+  );
 }
 
 export function QueryProvider({ children }: { children: React.ReactNode }) {
@@ -23,14 +37,23 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
     () =>
       new QueryClient({
         queryCache: new QueryCache({
-          onError: (error) => {
-            logApiError(error, "query.error");
+          onError: (error, query) => {
+            handleApiError(error, {
+              event: "query.error",
+              log: shouldLogQueryError(error),
+              toast:
+                !metaSuppressesToast(query.meta) && shouldToastQueryError(error),
+            });
           },
         }),
         mutationCache: new MutationCache({
-          onError: (error) => {
-            logApiError(error, "mutation.error");
-            if (shouldToastQueryError(error)) showErrorToast(error);
+          onError: (error, _vars, _ctx, mutation) => {
+            handleApiError(error, {
+              event: "mutation.error",
+              log: shouldLogQueryError(error),
+              toast:
+                !metaSuppressesToast(mutation.meta) && shouldToastQueryError(error),
+            });
           },
         }),
         defaultOptions: {

@@ -5,6 +5,7 @@ Each tool is a small, pure function that the LLM can call. Real
 implementations will hit DBs/APIs; these are stubs to learn the pattern.
 """
 
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -230,6 +231,17 @@ def resume_screen(role: str, min_score: int = 6) -> dict:
 
 
 @tool
+def run_agent_script(
+    storage_path: str,
+    agent_id: str,
+    script_slug: str | None = None,
+    extra_args: dict | None = None,
+) -> dict:
+    """Run this agent's pinned workspace script on a runtime upload."""
+    raise RuntimeError("run_agent_script is executed by the platform runner, not directly")
+
+
+@tool
 def karkard_process(
     storage_path: str,
     agent_id: str = "",
@@ -241,38 +253,45 @@ def karkard_process(
     storage_path must be the full path from workspace (e.g. var/agent_files/.../uuid_demo-karkard-raw.xlsx),
     not only the display filename.
     """
+    from src.core.agent_file_roles import is_output_sample_file
+    from src.core.agent_workspace_files import (
+        canonical_workspace_download_url,
+        mirror_karkard_output_to_workspace,
+    )
     from src.karkard.output import KARKARD_OUTPUT_DIR
-    from src.karkard.paths import find_processed_output, resolve_storage_path
+    from src.karkard.paths import resolve_locked_karkard_input, resolve_storage_path
     from src.karkard.processor import process_karkard_workbook
 
-    path = resolve_storage_path(storage_path, agent_id=agent_id or None)
-    existing = find_processed_output(path)
-    if existing:
-        return {
-            "input": str(path),
-            "output_file": existing.name,
-            "download_path": f"/api/v1/demo-files/karkard/{existing.name}",
-            "summary": (
-                f"فایل پردازش‌شده «{existing.name}» از قبل موجود است. "
-                "لینک دانلود همان خروجی نهایی HR است."
-            ),
-            "sheets_processed": True,
-            "already_processed": True,
-        }
+    if agent_id:
+        path = resolve_locked_karkard_input(agent_id, storage_path)
+    else:
+        path = resolve_storage_path(storage_path, agent_id=None)
+    if is_output_sample_file(path.name):
+        raise ValueError(
+            "فایل نمونه خروجی قابل پردازش نیست — فایل خام حضور و غیاب (ورود/خروج) را آپلود کنید."
+        )
 
-    out_dir = KARKARD_OUTPUT_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    # Write beside the upload so workspace URLs resolve; mirror to shared karkard dir.
     out = process_karkard_workbook(
         path,
-        out_dir,
+        path.parent,
         company_name=company_name,
         jalali_year=jalali_year,
+        agent_id=agent_id or None,
+    )
+    KARKARD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    shared_copy = KARKARD_OUTPUT_DIR / out.name
+    if out.resolve() != shared_copy.resolve():
+        shutil.copy2(out, shared_copy)
+    ws_url = (
+        canonical_workspace_download_url(agent_id, mirror_karkard_output_to_workspace(agent_id, out))
+        if agent_id
+        else f"/api/v1/demo-files/karkard/{out.name}"
     )
     return {
         "input": str(path),
         "output_file": out.name,
-        "download_path": f"/api/v1/demo-files/karkard/{out.name}",
+        "download_path": ws_url,
         "summary": (
             f"فایل کارکرد «{path.name}» پردازش شد. "
             f"ستون‌های موظف، اضافه‌کار، کسرکار و تعطیل‌کاری طبق دستورالعمل HR به‌روز شد."
@@ -300,3 +319,4 @@ ToolRegistry.register("report_generate", report_generate)
 ToolRegistry.register("resume_screen", resume_screen)
 ToolRegistry.register("crm_lookup", crm_lookup)
 ToolRegistry.register("karkard_process", karkard_process)
+ToolRegistry.register("run_agent_script", run_agent_script)

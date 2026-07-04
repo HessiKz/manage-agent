@@ -18,7 +18,19 @@ from src.core.conversation_preview import (
 from src.models.activity_log import ActivityLog
 from src.models.agent import Agent
 from src.models.user import User
-from src.schemas.conversation import ConversationDetail, ConversationListItem, ConversationMessage
+from src.schemas.conversation import (
+    ConversationDetail,
+    ConversationListItem,
+    ConversationMessage,
+    SupportThreadListItem,
+)
+
+SUPPORT_AGENT_SLUG = "support"
+
+
+def thread_owned_by_user(user: User, agent_id: UUID, thread_id: str) -> bool:
+    prefix = f"user-{user.id}:agent-{agent_id}"
+    return thread_id == prefix or thread_id.startswith(f"{prefix}:session-")
 
 
 def _action_filter():
@@ -51,6 +63,7 @@ class ConversationService:
                 ActivityLog.user_id == user.id,
                 _action_filter(),
                 ActivityLog.input_text.isnot(None),
+                Agent.slug != SUPPORT_AGENT_SLUG,
             )
             .order_by(ActivityLog.started_at.desc())
             .limit(limit)
@@ -167,3 +180,86 @@ class ConversationService:
                     )
                 )
         return out
+
+    def messages_from_thread(self, thread_id: str) -> list[ConversationMessage]:
+        raw = ConversationMemory.history(thread_id)
+        out: list[ConversationMessage] = []
+        for msg in raw:
+            role = msg.get("role", "user")
+            content = str(msg.get("content", ""))
+            if role == "assistant":
+                content = sanitize_chat_output(content)
+            elif role == "user":
+                cleaned = humanize_user_message(content, max_len=8000)
+                content = cleaned or content.strip()[:8000]
+            if content.strip():
+                out.append(ConversationMessage(role=role, content=content))
+        return out
+
+    async def get_thread_messages_for_user(
+        self, user: User, agent_id: UUID, thread_id: str
+    ) -> list[ConversationMessage]:
+        if not thread_owned_by_user(user, agent_id, thread_id):
+            raise HTTPException(status_code=403, detail="Invalid thread for user")
+
+        agent = await self.db.get(Agent, agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        return self.messages_from_thread(thread_id)
+
+    async def list_support_threads(
+        self, user: User, agent_id: UUID, *, limit: int = 40
+    ) -> list[SupportThreadListItem]:
+        agent = await self.db.get(Agent, agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if agent.slug != SUPPORT_AGENT_SLUG:
+            raise HTTPException(status_code=400, detail="Not a support agent")
+
+        stmt = (
+            select(
+                ActivityLog.details,
+                ActivityLog.input_text,
+                ActivityLog.started_at,
+            )
+            .where(
+                ActivityLog.user_id == user.id,
+                ActivityLog.agent_id == agent_id,
+                ActivityLog.action == "invoke",
+            )
+            .order_by(ActivityLog.started_at.desc())
+            .limit(limit * 4)
+        )
+        result = await self.db.execute(stmt)
+        by_thread: dict[str, SupportThreadListItem] = {}
+        prefix = f"user-{user.id}:agent-{agent_id}"
+
+        for details, input_text, started_at in result.all():
+            tid = (details or {}).get("thread_id") or prefix
+            if not thread_owned_by_user(user, agent_id, tid):
+                continue
+            iso = started_at.isoformat() if started_at else None
+            preview = humanize_user_message(input_text, max_len=120) or "گفتگوی پشتیبانی"
+            msg_count = len(ConversationMemory.history(tid)) if tid else 0
+            existing = by_thread.get(tid)
+            if existing:
+                if iso and (not existing.updated_at or iso > existing.updated_at):
+                    existing.updated_at = iso
+                existing.message_count = max(existing.message_count, msg_count)
+                continue
+            by_thread[tid] = SupportThreadListItem(
+                thread_id=tid,
+                preview=preview,
+                started_at=iso,
+                updated_at=iso,
+                message_count=msg_count,
+            )
+            if len(by_thread) >= limit:
+                break
+
+        return sorted(
+            by_thread.values(),
+            key=lambda t: t.updated_at or t.started_at or "",
+            reverse=True,
+        )

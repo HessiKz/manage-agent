@@ -14,6 +14,8 @@ class AgentRunResult:
     model_name: str = ""
     tokens_input: int = 0
     tokens_output: int = 0
+    ui_actions: list[dict[str, Any]] = field(default_factory=list)
+    ui_scripts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def trace_step(

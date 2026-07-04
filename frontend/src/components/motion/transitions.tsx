@@ -18,17 +18,21 @@ export function PageTransition({
   children,
   animateOnMount = false,
   animate = true,
+  transitionKey,
 }: {
   children: React.ReactNode;
   /** Marketing/auth: play enter on first paint */
   animateOnMount?: boolean;
   /** Set false to play exit (e.g. logout) */
   animate?: boolean;
+  /** Defaults to pathname; combine with viewMode for shell swaps */
+  transitionKey?: string;
 }) {
   const mounted = useMounted();
   const pathname = usePathname();
   const reduced = useReducedMotion();
   const variants = useMemo(() => getPageVariants(!!reduced), [reduced]);
+  const motionKey = transitionKey ?? pathname;
 
   if (!mounted) {
     return <div className="w-full">{children}</div>;
@@ -37,7 +41,7 @@ export function PageTransition({
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
-        key={pathname}
+        key={motionKey}
         layout={false}
         variants={variants}
         initial={animateOnMount ? "initial" : false}

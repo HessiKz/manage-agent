@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pause, Trash2 } from "lucide-react";
+import { Pause, Pencil, Trash2 } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -45,6 +45,7 @@ import { ClientDateTime } from "@/components/ui/client-date";
 import { LlmProviderPanel } from "@/components/admin/llm-provider-panel";
 import { useAuthStore } from "@/stores/auth-store";
 import type { Agent } from "@/types";
+import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 
 function AgentAdminRow({
   agent: a,
@@ -79,18 +80,27 @@ function AgentAdminRow({
         >
           {statusLabel(a.status)}
         </Badge>
+        {(a.status === "active" || a.status === "draft" || a.status === "paused") && (
+          <Link
+            href={`/agents/create?slug=${a.slug}&mode=edit`}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:underline"
+          >
+            <Pencil className="h-3 w-3" />
+            ویرایش
+          </Link>
+        )}
         {a.status === "active" && (
           <Link
             href={`/agents/${a.slug}`}
             className="text-xs font-semibold text-brand-700 hover:underline"
           >
-            باز کردن
+            داشبورد
           </Link>
         )}
         {pipeline && a.status === "deploying" && (
           <>
             <Link
-              href={`/agents/create/testing?slug=${a.slug}&name=${encodeURIComponent(a.name)}`}
+              href={`/agents/create?slug=${a.slug}`}
               className="text-xs font-semibold text-brand-700 hover:underline"
             >
               مشاهده تست
@@ -103,7 +113,7 @@ function AgentAdminRow({
               title="توقف استقرار"
             >
               {busyId === a.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <LoadingSpinner />
               ) : (
                 <Pause className="h-3.5 w-3.5" />
               )}
@@ -127,7 +137,7 @@ function AgentAdminRow({
           title="حذف ایجنت"
         >
           {busyId === a.id ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <LoadingSpinner />
           ) : (
             <Trash2 className="h-3.5 w-3.5" />
           )}
@@ -144,7 +154,10 @@ export default function AdminPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const qc = useQueryClient();
   const { data: overview } = useQuery({ queryKey: ["overview"], queryFn: fetchOverview });
-  const { data: topAgents = [] } = useQuery({ queryKey: ["top-agents"], queryFn: fetchTopAgents });
+  const { data: topAgents = [] } = useQuery({
+    queryKey: ["top-agents"],
+    queryFn: () => fetchTopAgents(),
+  });
   const { data: usage = [] } = useQuery({
     queryKey: ["usage", days],
     queryFn: () => fetchUsage(days),
@@ -168,6 +181,15 @@ export default function AdminPage() {
     queryFn: () => fetchAgents({ catalog_only: false, page_size: 100 }),
   });
   const allAgents = allAgentsPage?.items ?? [];
+
+  const unifiedAgents = useMemo(() => {
+    const pipelineIds = new Set(pipelineAgents.map((a) => a.id));
+    const rest = allAgents.filter((a) => !pipelineIds.has(a.id));
+    return [
+      ...pipelineAgents.map((a) => ({ agent: a, pipeline: true as const })),
+      ...rest.map((a) => ({ agent: a, pipeline: false as const })),
+    ];
+  }, [pipelineAgents, allAgents]);
 
   async function handlePause(agent: Agent) {
     if (agent.status !== "deploying") return;
@@ -210,6 +232,7 @@ export default function AdminPage() {
         qc.invalidateQueries({ queryKey: ["admin-all-agents"] }),
         qc.invalidateQueries({ queryKey: ["agents"] }),
         qc.invalidateQueries({ queryKey: ["overview"] }),
+        qc.invalidateQueries({ queryKey: ["departments"] }),
         qc.invalidateQueries({ queryKey: ["sidebar-counts"] }),
       ]);
     } catch {
@@ -224,44 +247,57 @@ export default function AdminPage() {
   }
 
   const chartData = usage.map((u) => ({
-    day: u.day?.slice(5, 10) ?? "",
+    day:
+      days === 1
+        ? (u.day?.slice(11, 16) ?? "")
+        : (u.day?.slice(5, 10) ?? ""),
     runs: u.runs,
   }));
 
-  const allHealthy = useMemo(
-    () => health.length > 0 && health.every((h) => h.status === "healthy"),
-    [health]
-  );
-
   return (
-    <div className="space-y-6 p-6 pb-10">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-stone-900">نمای کلی پلتفرم</h1>
-          <p className="text-stone-500">مصرف، سلامت سیستم و رویدادها</p>
+    <div className="page-padding space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-stone-900 sm:text-2xl">نمای کلی پلتفرم</h1>
+          <p className="text-sm text-stone-500 sm:text-base">مصرف، سلامت سیستم و رویدادها</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={allHealthy ? "success" : "warning"}>
-            {allHealthy ? "همه سیستم‌ها سالم" : "نیازمند بررسی"}
-          </Badge>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <Link href="/agents/create">
             <Button>ایجنت جدید</Button>
-          </Link>
-          <Link href="/users">
-            <Button variant="secondary">دعوت کاربر</Button>
           </Link>
         </div>
       </div>
 
-      {isSuperuser && <LlmProviderPanel />}
+      {isSuperuser && (
+        <details className="group rounded-2xl border border-stone-200 bg-white">
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-stone-800 marker:content-none [&::-webkit-details-marker]:hidden">
+            تنظیمات ارائه‌دهنده مدل (LLM)
+            <span className="mr-2 text-xs font-normal text-stone-500">— برای باز کردن کلیک کنید</span>
+          </summary>
+          <div className="border-t border-stone-100 px-2 pb-2">
+            <LlmProviderPanel />
+          </div>
+        </details>
+      )}
 
       {overview && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           <StatCard label="کاربران" value={overview.users.total} />
           <StatCard label="ایجنت‌های فعال" value={overview.agents.active} />
           <StatCard label="کل ایجنت‌ها" value={overview.agents.total} />
           <StatCard label="دپارتمان‌ها" value={overview.departments.total} />
-          <StatCard label="اجراهای کل" value={overview.runs.total} />
+          <StatCard
+            label="اجراهای کل"
+            value={overview.runs.total}
+            hint={`${overview.runs.successful} موفق · ${Math.max(0, overview.runs.total - overview.runs.successful)} ناموفق`}
+            chartVariant="savings"
+          />
+          <StatCard
+            label="نرخ موفقیت"
+            value={`${overview.success_rate.toFixed(1)}٪`}
+            hint={`${overview.runs.successful} از ${overview.runs.total} اجرا`}
+            chartVariant="accuracy"
+          />
           <StatCard label="هزینه (USD)" value={`$${overview.total_cost_usd.toFixed(2)}`} />
           {budgetSummary && (
             <>
@@ -279,36 +315,12 @@ export default function AdminPage() {
         </div>
       )}
 
-      {pipelineAgents.length > 0 && (
-        <Card>
-          <CardHeader className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="font-bold">ایجنت‌های در حال استقرار / نیازمند اصلاح</h3>
-              <p className="mt-0.5 text-xs text-stone-500">به‌روزرسانی خودکار هر ۵ ثانیه</p>
-            </div>
-            <Loader2 className="h-4 w-4 animate-spin text-brand-600" aria-hidden />
-          </CardHeader>
-          <CardBody className="space-y-2">
-            {pipelineAgents.map((a) => (
-              <AgentAdminRow
-                key={a.id}
-                agent={a}
-                busyId={busyId}
-                onPause={handlePause}
-                onDelete={handleDelete}
-                pipeline
-              />
-            ))}
-          </CardBody>
-        </Card>
-      )}
-
-      <Card>
+      <Card data-ma-guide="admin-agents">
         <CardHeader className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="font-bold">مدیریت همه ایجنت‌ها</h3>
+            <h3 className="font-bold">همه ایجنت‌ها</h3>
             <p className="mt-0.5 text-xs text-stone-500">
-              حذف دائمی — فقط برای ادمین · {allAgents.length} ایجنت
+              شامل استقرار و خطا · {unifiedAgents.length} ایجنت · به‌روزرسانی خودکار
             </p>
           </div>
           <Link href="/agents/create">
@@ -316,16 +328,17 @@ export default function AdminPage() {
           </Link>
         </CardHeader>
         <CardBody className="max-h-[420px] space-y-2 overflow-y-auto">
-          {allAgents.length === 0 && (
+          {unifiedAgents.length === 0 && (
             <p className="py-6 text-center text-sm text-stone-400">ایجنتی ثبت نشده است.</p>
           )}
-          {allAgents.map((a) => (
+          {unifiedAgents.map(({ agent: a, pipeline }) => (
             <AgentAdminRow
               key={a.id}
               agent={a}
               busyId={busyId}
               onPause={handlePause}
               onDelete={handleDelete}
+              pipeline={pipeline}
             />
           ))}
         </CardBody>
@@ -336,7 +349,7 @@ export default function AdminPage() {
         <Card className="h-fit w-full">
           <CardHeader className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="font-bold">مصرف ایجنت‌ها</h3>
-            <div className="inline-flex rounded-full border border-stone-200 bg-white p-1 text-xs">
+            <div className="touch-scroll-x inline-flex max-w-full rounded-full border border-stone-200 bg-white p-1 text-xs">
               {[
                 { d: 1, t: "۲۴ ساعت" },
                 { d: 7, t: "۷ روز" },
@@ -399,31 +412,7 @@ export default function AdminPage() {
         </Card>
         </DashboardCol>
 
-        <DashboardCol slot="bottomLeft">
-        <Card className="w-full">
-          <CardHeader className="flex items-center justify-between">
-            <h3 className="font-bold">سلامت سامانه</h3>
-            <Link href="/integrations" className="text-xs font-semibold text-brand-700 hover:underline">
-              مدیریت اتصالات
-            </Link>
-          </CardHeader>
-          <CardBody className="space-y-2">
-            {health.map((h) => (
-              <div
-                key={h.name}
-                className="flex items-center justify-between gap-2 rounded-xl border border-stone-100 px-4 py-2"
-              >
-                <span className="font-medium text-stone-800">{h.name}</span>
-                <Badge variant={h.status === "healthy" ? "success" : "warning"}>
-                  {h.status === "healthy" ? "سالم" : "تأخیر"} · {h.latency_ms}ms
-                </Badge>
-              </div>
-            ))}
-          </CardBody>
-        </Card>
-        </DashboardCol>
-
-        <DashboardCol slot="bottomRight">
+        <DashboardCol slot="bottomRight" className="flex flex-col gap-6">
         <Card className="w-full">
           <CardHeader className="flex items-center justify-between">
             <h3 className="font-bold">رویدادهای اخیر</h3>
@@ -438,6 +427,28 @@ export default function AdminPage() {
                 <p className="text-xs text-stone-400">
                   <ClientDateTime iso={e.created_at} />
                 </p>
+              </div>
+            ))}
+          </CardBody>
+        </Card>
+
+        <Card className="w-full">
+          <CardHeader className="flex items-center justify-between">
+            <h3 className="font-bold">سلامت سامانه</h3>
+            <Link href="/agents/create?step=api" className="text-xs font-semibold text-brand-700 hover:underline">
+              مدیریت اتصالات
+            </Link>
+          </CardHeader>
+          <CardBody className="space-y-2">
+            {health.map((h) => (
+              <div
+                key={h.name}
+                className="flex items-center justify-between gap-2 rounded-xl border border-stone-100 px-4 py-2"
+              >
+                <span className="font-medium text-stone-800">{h.name}</span>
+                <Badge variant={h.status === "healthy" ? "success" : "warning"}>
+                  {h.status === "healthy" ? "سالم" : "تأخیر"} · {h.latency_ms}ms
+                </Badge>
               </div>
             ))}
           </CardBody>
