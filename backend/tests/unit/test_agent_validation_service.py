@@ -39,6 +39,18 @@ def test_is_fixable_orchestration_bad_request_true():
     assert _svc()._is_fixable(err) is True
 
 
+def test_planning_prompt_requires_persian_output():
+    prompt = AgentValidationService._PLANNING_SYSTEM
+    assert "fa-IR" in prompt
+    assert "Persian" in prompt
+    assert "analysis" in prompt
+    assert "questions" in prompt
+
+
+def test_planning_locale_constant():
+    assert AgentValidationService.PLANNING_LOCALE == "fa-IR"
+
+
 def test_action_variables_uses_defaults_and_types():
     action = SimpleNamespace(
         input_schema={

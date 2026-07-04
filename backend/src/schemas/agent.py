@@ -4,23 +4,29 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from src.config import settings
 
 from src.models.agent import AgentKind, AgentStatus, canonical_agent_kind
+from src.models.agent_link import AgentLinkType
 from src.schemas.agent_action import AgentActionCreate, AgentActionRead
 from src.schemas.agent_capabilities import (
     AgentCapabilities,
     AgentFilePolicy,
     AgentLinkPolicy,
     capabilities_for_kind,
+    clamp_capabilities_for_kind,
     file_policy_for_kind,
 )
 from src.schemas.agent_api_bindings import (
     AgentApiBindings,
     merge_api_bindings_into_config,
     parse_api_bindings,
+)
+from src.schemas.agent_knowledge_bindings import (
+    AgentKnowledgeBindings,
+    merge_knowledge_bindings_into_config,
 )
 from src.schemas.agent_link import AgentLinkCreate, AgentLinkRead
 from src.schemas.agent_template import AgentPromptTemplateCreate, AgentPromptTemplateRead
@@ -35,7 +41,7 @@ class AgentBase(BaseModel):
     file_policy: AgentFilePolicy = Field(default_factory=AgentFilePolicy)
     agent_link_policy: AgentLinkPolicy = Field(default_factory=AgentLinkPolicy)
     model_provider: str = "openai"
-    model_name: str = "auto"
+    model_name: str = "claude-opus-4-8"
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_iterations: int = Field(20, ge=1, le=100)
     system_prompt: str | None = None
@@ -47,20 +53,44 @@ class AgentBase(BaseModel):
     overtime_threshold_hours: int | None = None
     config_json: dict = {}
 
-    @model_validator(mode="after")
-    def validate_file_policy_when_upload(self):
-        caps = self.capabilities
-        if caps.file_upload_enabled:
-            fp = self.file_policy
-            if not fp.allowed_mime_types and not fp.allowed_extensions:
-                raise ValueError("file_policy must include allowed_mime_types or allowed_extensions")
-        return self
+
+def _validate_file_policy_when_upload(caps: AgentCapabilities, fp: AgentFilePolicy) -> None:
+    if not caps.file_upload_enabled:
+        return
+    if fp.allow_all_types:
+        return
+    if not fp.allowed_mime_types and not fp.allowed_extensions:
+        raise ValueError("file_policy must include allowed_mime_types or allowed_extensions")
 
 
 class AgentPermissionGrant(BaseModel):
     user_id: UUID
     can_invoke: bool = True
     can_configure: bool = False
+
+
+class AgentPermissionsReplace(BaseModel):
+    permissions: list[AgentPermissionGrant] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_invalid_grants(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        perms = data.get("permissions")
+        if not isinstance(perms, list):
+            return data
+        cleaned: list[object] = []
+        for item in perms:
+            if not isinstance(item, dict):
+                continue
+            uid = item.get("user_id")
+            if uid is None or uid == "":
+                continue
+            cleaned.append(item)
+        data = dict(data)
+        data["permissions"] = cleaned
+        return data
 
 
 class AgentCreate(AgentBase):
@@ -70,6 +100,27 @@ class AgentCreate(AgentBase):
     templates: list[AgentPromptTemplateCreate] = []
     links: list[AgentLinkCreate] = []
     api_bindings: AgentApiBindings | None = None
+    knowledge_bindings: AgentKnowledgeBindings | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_invalid_permission_grants(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        perms = data.get("permissions")
+        if not isinstance(perms, list):
+            return data
+        cleaned: list[object] = []
+        for item in perms:
+            if not isinstance(item, dict):
+                continue
+            uid = item.get("user_id")
+            if uid is None or uid == "":
+                continue
+            cleaned.append(item)
+        data = dict(data)
+        data["permissions"] = cleaned
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -84,12 +135,15 @@ class AgentCreate(AgentBase):
             data["capabilities"] = capabilities_for_kind(kind)
         elif isinstance(caps, dict):
             data["capabilities"] = capabilities_for_kind(kind, caps)
+        else:
+            data["capabilities"] = clamp_capabilities_for_kind(kind, caps)
         fp = data.get("file_policy")
         if fp is None or (isinstance(fp, dict) and not fp):
             data["file_policy"] = file_policy_for_kind(kind)
         elif isinstance(fp, dict):
             data["file_policy"] = file_policy_for_kind(kind, fp)
         api_bindings = data.pop("api_bindings", None)
+        knowledge_bindings = data.pop("knowledge_bindings", None)
         cfg = data.get("config_json") or {}
         if not isinstance(cfg, dict):
             cfg = {}
@@ -100,21 +154,46 @@ class AgentCreate(AgentBase):
                 bindings = AgentApiBindings.model_validate(api_bindings)
             else:
                 bindings = None
-            data["config_json"] = merge_api_bindings_into_config(cfg, bindings)
+            cfg = merge_api_bindings_into_config(cfg, bindings)
         elif caps.get("external_apis_enabled") if isinstance(caps, dict) else getattr(
             caps, "external_apis_enabled", False
         ):
-            data["config_json"] = merge_api_bindings_into_config(cfg, AgentApiBindings())
+            cfg = merge_api_bindings_into_config(cfg, AgentApiBindings())
+        if knowledge_bindings is not None:
+            if isinstance(knowledge_bindings, AgentKnowledgeBindings):
+                kb = knowledge_bindings
+            elif isinstance(knowledge_bindings, dict):
+                kb = AgentKnowledgeBindings.model_validate(knowledge_bindings)
+            else:
+                kb = None
+            cfg = merge_knowledge_bindings_into_config(cfg, kb)
+        data["config_json"] = cfg
         return data
 
     @model_validator(mode="after")
     def validate_api_bindings_when_enabled(self) -> "AgentCreate":
+        _validate_file_policy_when_upload(self.capabilities, self.file_policy)
         caps = self.capabilities
         needs_api = caps.external_apis_enabled
         if needs_api and parse_api_bindings(self.config_json).is_empty():
             raise ValueError(
                 "At least one external API service or endpoint must be selected"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_agent_links_for_routing(self) -> "AgentCreate":
+        caps = self.capabilities
+        kind = canonical_agent_kind(self.kind)
+        needs_links = kind == AgentKind.SUPERVISOR or caps.can_call_agents
+        if not needs_links:
+            return self
+        link_type = AgentLinkType.SUPERVISES if kind == AgentKind.SUPERVISOR else AgentLinkType.TOOL
+        selected = [link for link in self.links if link.link_type == link_type]
+        if not selected:
+            if kind == AgentKind.SUPERVISOR:
+                raise ValueError("Supervisor agents must link at least one sub-agent")
+            raise ValueError("can_call_agents requires at least one tool agent link")
         return self
 
 
@@ -140,26 +219,44 @@ class AgentUpdate(BaseModel):
     overtime_threshold_hours: int | None = None
     config_json: dict | None = None
     api_bindings: AgentApiBindings | None = None
+    knowledge_bindings: AgentKnowledgeBindings | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def merge_api_bindings(cls, data: dict) -> dict:
+    def merge_bindings(cls, data: dict) -> dict:
         if not isinstance(data, dict):
             return data
         api_bindings = data.pop("api_bindings", None)
-        if api_bindings is None:
+        knowledge_bindings = data.pop("knowledge_bindings", None)
+        if api_bindings is None and knowledge_bindings is None:
             return data
         cfg = data.get("config_json") or {}
         if not isinstance(cfg, dict):
             cfg = {}
-        if isinstance(api_bindings, dict):
-            bindings = AgentApiBindings.model_validate(api_bindings)
-        elif isinstance(api_bindings, AgentApiBindings):
-            bindings = api_bindings
-        else:
-            bindings = None
-        data["config_json"] = merge_api_bindings_into_config(cfg, bindings)
+        if api_bindings is not None:
+            if isinstance(api_bindings, dict):
+                bindings = AgentApiBindings.model_validate(api_bindings)
+            elif isinstance(api_bindings, AgentApiBindings):
+                bindings = api_bindings
+            else:
+                bindings = None
+            cfg = merge_api_bindings_into_config(cfg, bindings)
+        if knowledge_bindings is not None:
+            if isinstance(knowledge_bindings, dict):
+                kb = AgentKnowledgeBindings.model_validate(knowledge_bindings)
+            elif isinstance(knowledge_bindings, AgentKnowledgeBindings):
+                kb = knowledge_bindings
+            else:
+                kb = None
+            cfg = merge_knowledge_bindings_into_config(cfg, kb)
+        data["config_json"] = cfg
         return data
+
+    @model_validator(mode="after")
+    def validate_file_policy_when_upload(self) -> "AgentUpdate":
+        if self.capabilities is not None and self.file_policy is not None:
+            _validate_file_policy_when_upload(self.capabilities, self.file_policy)
+        return self
 
 
 class AgentRead(AgentBase):
@@ -172,6 +269,20 @@ class AgentRead(AgentBase):
     owner_id: UUID | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _coerce_temperature(cls, value: object) -> object:
+        if isinstance(value, Decimal):
+            return float(value)
+        return value
+
+    @field_validator("cost_limit_monthly", "cost_limit_daily", mode="before")
+    @classmethod
+    def _coerce_optional_decimal(cls, value: object) -> object:
+        if isinstance(value, Decimal):
+            return float(value)
+        return value
 
     @field_serializer("kind")
     def serialize_kind(self, kind: AgentKind) -> str:
@@ -223,3 +334,12 @@ class AgentRouteResponse(BaseModel):
     agent: dict | None = None
     confidence: float = 0.0
     reason: str = ""
+
+
+class ValidationAnswersRequest(BaseModel):
+    answers: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentInstructionRefreshRequest(BaseModel):
+    instruction_text: str | None = None
+    force: bool = False

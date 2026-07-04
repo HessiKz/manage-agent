@@ -3,11 +3,12 @@
 Two providers are supported and can be toggled at runtime from the admin panel:
 
 - ``gateway``  – the OpenAI-compatible gateway configured via env
-  (``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``, e.g. gapgpt). Agent ``model_name``
-  is used as-is.
+  (``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``, e.g. gapgpt).
 - ``cursor``   – the local ``cursor-to-api`` proxy that wraps the Cursor agent
-  CLI. It exposes an OpenAI-compatible endpoint but uses Cursor's own model
-  ids, so we pin a single configured model (default ``auto``).
+  CLI. It exposes an OpenAI-compatible endpoint.
+
+Per-agent ``model_name`` is honored when set; otherwise ``openai_default_model``
+from settings is used.
 
 The selection is persisted in the ``platform_settings`` table and mirrored here
 in a process-local cache so the sync ``build_llm`` path can resolve it without a
@@ -24,6 +25,26 @@ from typing import Any, Literal
 from src.config import settings
 
 Provider = Literal["gateway", "cursor"]
+DEFAULT_MODEL = "claude-opus-4-8"
+
+
+def available_models() -> list[str]:
+    """Curated models exposed to the wizard model picker."""
+    raw = settings.available_models_csv
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    return models or [settings.openai_default_model or DEFAULT_MODEL]
+
+
+def resolve_model_name(model_name: str | None) -> str:
+    """Pick a concrete model id from agent config or platform defaults."""
+    candidate = (model_name or "").strip()
+    if candidate and candidate in available_models():
+        return candidate
+    if candidate:
+        return candidate
+    default = settings.openai_default_model or DEFAULT_MODEL
+    models = available_models()
+    return default if default in models else models[0]
 
 # The platform_settings key under which the provider selection is stored.
 LLM_PROVIDER_KEY = "llm_provider"
@@ -95,11 +116,8 @@ def active_provider() -> Provider:
 
 
 def resolve(model_name: str | None = None) -> ResolvedLLM:
-    """Resolve connection params for the active provider.
-
-    ``model_name`` (the agent's configured model) is honoured for the gateway
-    provider and ignored for cursor (which pins its own configured model).
-    """
+    """Resolve connection params for the active provider."""
+    model = resolve_model_name(model_name)
     if active_provider() == "cursor":
         cursor = _state["cursor"]
         return ResolvedLLM(
@@ -107,13 +125,11 @@ def resolve(model_name: str | None = None) -> ResolvedLLM:
             base_url=cursor["base_url"],
             # ChatOpenAI requires a non-empty key even when the proxy ignores it.
             api_key=cursor["api_key"] or "cursor-to-api",
-            model=cursor["model"] or "auto",
+            model=model,
         )
     return ResolvedLLM(
         provider="gateway",
         base_url=settings.openai_base_url,
         api_key=settings.openai_api_key,
-        model=settings.openai_default_model
-        if not model_name or model_name == "auto"
-        else model_name,
+        model=model,
     )
