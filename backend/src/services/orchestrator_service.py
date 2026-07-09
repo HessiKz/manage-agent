@@ -126,9 +126,15 @@ class OrchestratorService:
             enriched += f"\n\n---\nContext from knowledge base:\n{rag_context}"
         return enriched
 
-    async def resolve_tool_names(self, agent: Agent, user: User) -> list[str]:
+    async def resolve_tool_names(self, agent: Agent, user: User, raw_input: str | None = None) -> list[str]:
         if is_support_agent_slug(agent.slug):
-            tool_names = list(PLATFORM_SUPPORT_TOOL_NAMES)
+            from src.agents_lib.platform_support_grounding import needs_any_platform_tool
+
+            tool_names = (
+                list(PLATFORM_SUPPORT_TOOL_NAMES)
+                if raw_input is None or needs_any_platform_tool(raw_input)
+                else []
+            )
         else:
             # Bind only the tools the agent actually declares (+ its runtime-plan
             # primary tool). Injecting the full DOMAIN_TOOL_SLUGS into every agent
@@ -219,13 +225,6 @@ class OrchestratorService:
 
         thread_id = payload.thread_id or f"user-{user.id}:agent-{agent.id}"
 
-        cache_key = await self._invoke_cache_key(agent, thread_id, payload)
-        skip_cache = preview or "karkard_process" in (agent.tool_names or [])
-        if not payload.stream and depth == 0 and not payload.action_slug and not skip_cache:
-            cached = CacheService.get_json(self.CACHE_NS, cache_key)
-            if cached and isinstance(cached, dict) and cached.get("output"):
-                return AgentInvokeResponse(**cached)
-
         log_row = None
         if not preview:
             log_row = await self.activity.start(
@@ -236,6 +235,54 @@ class OrchestratorService:
             )
 
         try:
+            if agent.slug == "support" and not preview:
+                from src.agents_lib.platform_support_grounding import support_plain_response
+
+                plain = support_plain_response(payload.input)
+                if plain:
+                    InMemoryStore.append(thread_id, {"role": "user", "content": payload.input})
+                    InMemoryStore.append(thread_id, {"role": "assistant", "content": plain})
+                    tokens_in = max(1, len(payload.input) // 4)
+                    tokens_out = max(1, len(plain) // 4)
+                    resolved_for_cost = llm_runtime.resolve(agent.model_name)
+                    cost = estimate_cost(resolved_for_cost.model, tokens_in, tokens_out)
+                    duration_ms = 0
+                    activity_log_id = None
+                    if log_row is not None:
+                        log_row = await self.activity.finish(
+                            log_row,
+                            output_text=plain,
+                            tokens_input=tokens_in,
+                            tokens_output=tokens_out,
+                            cost_usd=cost,
+                            details={
+                                "thread_id": thread_id,
+                                "deterministic_support_reply": True,
+                            },
+                        )
+                        duration_ms = log_row.duration_ms or 0
+                        activity_log_id = log_row.id
+                    return AgentInvokeResponse(
+                        output=plain,
+                        tokens_input=tokens_in,
+                        tokens_output=tokens_out,
+                        cost_usd=Decimal(cost),
+                        duration_ms=duration_ms,
+                        activity_log_id=activity_log_id,
+                        execution_trace=[],
+                        llm_provider=resolved_for_cost.provider,
+                        model_name=resolved_for_cost.model,
+                    )
+
+            cache_key = await self._invoke_cache_key(agent, thread_id, payload)
+            skip_cache = preview or "karkard_process" in (agent.tool_names or [])
+            if not payload.stream and depth == 0 and not payload.action_slug and not skip_cache:
+                cached = CacheService.get_json(self.CACHE_NS, cache_key)
+                if cached and isinstance(cached, dict) and cached.get("output"):
+                    if log_row is not None:
+                        await self.activity.finish(log_row, output_text=cached.get("output"))
+                    return AgentInvokeResponse(**cached)
+
             history = InMemoryStore.history(thread_id)
             if preview:
                 enriched_input = await self._preview_enriched_input(agent, payload.input)
@@ -279,7 +326,7 @@ class OrchestratorService:
                     ]
                 )
             else:
-                tool_names = [] if preview else await self.resolve_tool_names(agent, user)
+                tool_names = [] if preview else await self.resolve_tool_names(agent, user, payload.input)
 
                 if tool_names:
                     from src.agents_lib.platform_tools import clear_platform_context, set_platform_context

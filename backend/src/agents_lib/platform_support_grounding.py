@@ -43,6 +43,14 @@ _AGENT_CREATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Minimal "create agent" intent without extra detail — e.g. "یک ایجنت بساز",
+# "ایجنت جدید بساز", "یک ایجنت جدید".  Distinguish from detailed requests
+# like "یک ایجنت برای پشتیبانی بساز" that contain department/role context.
+_AGENT_CREATE_MINIMAL_RE = re.compile(
+    r"^یک\s+ایجنت\s*(جدید)?\s*بساز$|^ایجنت\s+(جدید\s*)?بساز$|^یک\s+ایجنت\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
 _API_WORKFLOW_RE = re.compile(
     r"(api|اندپوینت|endpoint|اتصال|integration|سرویس|httpbin)",
     re.IGNORECASE,
@@ -50,6 +58,11 @@ _API_WORKFLOW_RE = re.compile(
 
 _CONTINUE_TESTING_RE = re.compile(
     r"(?:ادامه(?:\s*بده|\s*کن|\s*ده)?|continue|go\s*on|ادامه.*تست|continue.*test|مرحله\s*تست|platform_continue)",
+    re.IGNORECASE,
+)
+
+_TICKET_DRAFT_RE = re.compile(
+    r"(تیکت|ticket|بستن\s*تیکت|close\s*ticket|پاسخ\s*پیشنهادی|پاسخ\s*برای|جواب\s*برای|فرمت[:：])",
     re.IGNORECASE,
 )
 
@@ -87,7 +100,15 @@ agent-knowledge-summary / agent-knowledge-reindex قابل نمایش و باز�
 
 
 def is_ui_observation_message(user_input: str) -> bool:
-    return "[مشاهده UI" in user_input
+    """True only for the post-UI-execution observation callback the wizard posts back.
+
+    The support context block also contains a live-UI line ("[مشاهده UI زنده …")
+    on every message, so a bare substring check wrongly flagged the user's own
+    command as an observation — which stripped its tools and made the agent hang
+    on "یک ایجنت جدید بساز". The callback is the only message that carries the
+    post-execution marker, so match that specifically.
+    """
+    return "پس از اجرای UI" in user_input
 
 
 def is_ui_action_request(user_input: str) -> bool:
@@ -106,11 +127,21 @@ def is_provisioning_request(user_input: str) -> bool:
 
 
 def is_agent_create_request(user_input: str) -> bool:
-    """User wants a new agent via the create wizard."""
-    text = _strip_page_context(user_input).strip()
+    """User wants a new agent created through platform_create_agent.
+
+    Both bare ("یک ایجنت جدید بساز") and detailed ("یک ایجنت برای پشتیبانی بساز")
+    commands reach the tool path. Bare commands get sensible defaults from
+    infer_agent_create_defaults (name "ایجنت جدید") and the wizard automation
+    drives the visible UI end-to-end — so the quick-prompt actually builds the
+    agent instead of asking for more detail.
+
+    The command lives in the user-text portion (after '---'), since the
+    frontend prepends a page-context block.
+    """
+    text = _user_text_from_input(user_input)
     if is_api_provisioning_request(user_input):
         return False
-    return bool(_AGENT_CREATE_RE.search(text))
+    return bool(_AGENT_CREATE_RE.search(text)) or is_wizard_create_intent(user_input)
 
 
 def infer_agent_create_defaults(user_input: str) -> dict[str, str]:
@@ -140,6 +171,19 @@ def infer_agent_create_defaults(user_input: str) -> dict[str, str]:
 def _page_path_from_context(user_input: str) -> str | None:
     m = re.search(r"مسیر\s*فعلی[:\s]+(/[^\s\n\]]+)", user_input)
     return m.group(1).strip() if m else None
+
+
+def is_wizard_create_intent(user_input: str) -> bool:
+    """True when the input is a bare 'create agent' command without extra detail.
+
+    These are handled by the wizard automation (platform_execute_ui navigation).
+    Detailed requests (e.g. 'یک ایجنت برای پشتیبانی بساز') go through the tool
+    path or plain text depending on the current page.
+
+    The command lives in the user-text portion (after '---').
+    """
+    text = _user_text_from_input(user_input)
+    return bool(_AGENT_CREATE_MINIMAL_RE.match(text))
 
 
 def is_on_agent_create_wizard(user_input: str) -> bool:
@@ -181,6 +225,10 @@ def needs_grounded_tools(user_input: str) -> bool:
         return False
     if _CHITCHAT_RE.match(text):
         return False
+    if is_ticket_drafting_request(text):
+        return False
+    if is_plain_command(user_input):
+        return False
     if is_ui_action_request(text):
         return False
     if is_api_provisioning_request(text):
@@ -191,15 +239,24 @@ def needs_grounded_tools(user_input: str) -> bool:
 
 
 def needs_any_platform_tool(user_input: str) -> bool:
-    """Support agent must call a tool (data or UI)."""
-    text = _strip_page_context(user_input).strip()
+    """Support agent must call a tool (data or UI).
+
+    The command lives in the user-text portion (after the '---' separator the
+    frontend prepends), so match against that — otherwise 'یک ایجنت جدید بساز'
+    is stripped away and the agent gets zero tools and hangs.
+    """
+    text = _user_text_from_input(user_input)
     if not text:
         return False
     if is_ui_observation_message(user_input):
         return False
     if _CAPABILITIES_RE.search(text) or _CHITCHAT_RE.match(text):
         return False
-    return True
+    if is_ticket_drafting_request(text):
+        return False
+    if is_plain_command(user_input):
+        return False
+    return is_ui_action_request(text) or is_api_provisioning_request(text) or is_agent_create_request(text) or needs_grounded_tools(text)
 
 
 def is_api_provisioning_request(user_input: str) -> bool:
@@ -208,7 +265,7 @@ def is_api_provisioning_request(user_input: str) -> bool:
         return False
     if not is_provisioning_request(text):
         return False
-    return bool(_API_WORKFLOW_RE.search(text)) or "ایجنت" in text
+    return bool(_API_WORKFLOW_RE.search(text))
 
 
 def is_capabilities_question(user_input: str) -> bool:
@@ -216,10 +273,64 @@ def is_capabilities_question(user_input: str) -> bool:
     return bool(_CAPABILITIES_RE.search(text))
 
 
+def is_ticket_drafting_request(user_input: str) -> bool:
+    text = _strip_page_context(user_input).strip()
+    return bool(_TICKET_DRAFT_RE.search(text))
+
+
+def is_plain_command(user_input: str) -> bool:
+    """Input is a simple command that does NOT need platform tools.
+
+    Agent-create commands (bare or detailed) are NOT plain — they route to
+    platform_create_agent and the wizard automation drives the visible UI, so
+    the quick-prompt "یک ایجنت جدید بساز" actually builds the agent.
+    """
+    text = _strip_page_context(user_input).strip()
+    if is_wizard_create_intent(user_input):
+        return False
+    if is_agent_create_request(user_input):
+        return False
+    return False
+
+
+def support_plain_response(user_input: str) -> str | None:
+    """Deterministic support replies for underspecified commands.
+
+    Keep these out of the LLM/tool loop so the support agent does not promise
+    work, call tools without enough data, or leave the chat hanging.
+    """
+    if is_plain_command(user_input):
+        on_wizard = is_on_agent_create_wizard(user_input)
+        if on_wizard:
+            return (
+                "برای ساخت ایجنت جدید، همین‌جا در ویزارد نام و توضیح کوتاه ایجنت را وارد کنید "
+                "(یا یک نام پیشنهادی بفرستید تا کامل کنم). "
+                "مثلاً: «یک ایجنت به نام پشتیبان فروش بساز که به سوالات مشتریان درباره سفارش پاسخ بدهد»."
+            )
+        return (
+            "برای ساخت ایجنت جدید، لطفاً حداقل نام و توضیح کوتاه ایجنت را بفرستید. "
+            "مثلاً: «یک ایجنت به نام پشتیبان فروش بساز که به سوالات مشتریان درباره سفارش پاسخ بدهد»."
+        )
+    return None
+
+
 def _strip_page_context(user_input: str) -> str:
     if "---" in user_input:
-        return user_input.split("---", 1)[-1].strip()
+        return user_input.split("---", 1)[0].strip()
     return user_input
+
+
+def _user_text_from_input(user_input: str) -> str:
+    """The user's actual command — the part AFTER the first '---' separator.
+
+    The frontend wraps each support message as '<page context>\\n---\\n<user text>',
+    so _strip_page_context keeps the context and discards the command. Command
+    detection must read the user text instead, otherwise 'یک ایجنت جدید بساز'
+    (sent by the quick-prompt) is stripped away and never matched.
+    """
+    if "---" in user_input:
+        return user_input.split("---", 1)[1].strip()
+    return user_input.strip()
 
 
 def _parse_tool_payload(content: str) -> dict[str, Any] | None:
@@ -528,7 +639,18 @@ def ground_support_output(
             return (
                 "برای پاسخ دقیق باید ابزار پلتفرم را اجرا کنم — لطفاً درخواست را دوباره بفرستید."
             )
-        return "ابزار اجرا شد اما نتیجه برنگشت — درخواست را دقیق‌تر تکرار کنید."
+        # Tools were called but produced no text output — the LLM got stuck
+        # in a tool loop. Give a helpful fallback instead of generic noise.
+        grounded = "\n\n".join(formatted_blocks)
+        if grounded.strip():
+            return grounded.strip()
+        # LLM generated tool calls but no final message — offer help
+        return (
+            "لطفاً درخواست خود را واضح‌تر بیان کنید. برای مثال:\n"
+            "• ساخت ایجنت جدید: «یک ایجنت برای پشتیبانی بساز»\n"
+            "• جستجوی ایجنت: «ایجنت‌های بخش مالی را نشان بده»\n"
+            "• باز کردن ایجنت: «ایجنت پشتیبانی را باز کن»"
+        )
 
     cleaned = (llm_output or "").strip()
     if _NAVIGATION_CLAIM_RE.search(cleaned) and not tool_results:

@@ -193,6 +193,70 @@ def _extract_ui_actions_from_messages(messages: list[BaseMessage]) -> list[dict[
     return actions
 
 
+async def _forced_support_create_agent_result(
+    agent: Agent,
+    user_input: str,
+    trace: list[dict[str, Any]],
+    *,
+    llm_provider: str,
+    model_name: str,
+) -> AgentRunResult | None:
+    if agent.slug != "support":
+        return None
+    from src.agents_lib.platform_support_grounding import (
+        format_platform_tool_result,
+        infer_agent_create_defaults,
+        is_agent_create_request,
+        is_agent_testing_on_create_page,
+    )
+
+    if not is_agent_create_request(user_input) or is_agent_testing_on_create_page(user_input):
+        return None
+
+    from src.agents_lib.platform_tools import platform_create_agent
+
+    defaults = infer_agent_create_defaults(user_input)
+    payload = await platform_create_agent.ainvoke(
+        {
+            "name": defaults["name"],
+            "description": defaults["description"],
+            "department": defaults["department"],
+            "kind": defaults["kind"],
+            "output_format_spec": defaults["output_format_spec"],
+        }
+    )
+    payload["_tool"] = "platform_create_agent"
+    output = format_platform_tool_result(payload) or payload.get("message") or "ایجنت آماده شد."
+    trace.append(
+        trace_step(
+            "tool_result",
+            "ساخت ایجنت با ابزار پلتفرم",
+            detail=_truncate(output, 1200),
+            payload=payload,
+        )
+    )
+    return AgentRunResult(
+        output=output,
+        trace=numbered_trace(trace),
+        llm_provider=llm_provider,
+        model_name=model_name,
+        ui_actions=_extract_ui_actions_from_messages([
+            ToolMessage(
+                content=json.dumps(payload, ensure_ascii=False),
+                name="platform_create_agent",
+                tool_call_id="forced-platform-create-agent",
+            )
+        ]),
+        ui_scripts=_extract_ui_scripts_from_messages([
+            ToolMessage(
+                content=json.dumps(payload, ensure_ascii=False),
+                name="platform_create_agent",
+                tool_call_id="forced-platform-create-agent",
+            )
+        ]),
+    )
+
+
 def _resolve_tools_and_trace(
     agent: Agent,
     user_input: str,
@@ -512,6 +576,19 @@ async def run_react_agent_stream(
         )
     )
 
+    forced_create = await _forced_support_create_agent_result(
+        agent,
+        user_input,
+        trace,
+        llm_provider=resolved.provider,
+        model_name=resolved.model,
+    )
+    if forced_create is not None:
+        if forced_create.output:
+            yield ReactStreamItem(token=forced_create.output)
+        yield ReactStreamItem(result=forced_create)
+        return
+
     if resolved.provider == "cursor" and "karkard_process" not in names:
         direct = await run_cursor_tools_agent(agent, user_input, history, tool_names=names)
         if direct is not None:
@@ -621,6 +698,16 @@ async def run_react_agent(
             payload={"tools": names},
         )
     )
+    forced_create = await _forced_support_create_agent_result(
+        agent,
+        user_input,
+        trace,
+        llm_provider=resolved.provider,
+        model_name=resolved.model,
+    )
+    if forced_create is not None:
+        return forced_create
+
     if resolved.provider == "cursor" and "karkard_process" not in names:
         direct = await run_cursor_tools_agent(
             agent, user_input, history, tool_names=names

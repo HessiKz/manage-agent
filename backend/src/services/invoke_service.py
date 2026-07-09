@@ -91,22 +91,49 @@ class InvokeService:
         thread_id = payload.thread_id or f"user-{user.id}:agent-{agent.id}"
 
         try:
+            if agent.slug == "support":
+                from src.agents_lib.platform_support_grounding import support_plain_response
+
+                plain = support_plain_response(payload.input)
+                if plain:
+                    InMemoryStore.append(thread_id, {"role": "user", "content": payload.input})
+                    InMemoryStore.append(thread_id, {"role": "assistant", "content": plain})
+                    tokens_in = max(1, len(payload.input) // 4)
+                    tokens_out = max(1, len(plain) // 4)
+                    resolved = llm_runtime.resolve(agent.model_name)
+                    cost = estimate_cost(resolved.model, tokens_in, tokens_out)
+                    log_row = await self.activity.finish(
+                        log_row,
+                        output_text=plain,
+                        tokens_input=tokens_in,
+                        tokens_output=tokens_out,
+                        cost_usd=cost,
+                        details={"thread_id": thread_id, "deterministic_support_reply": True},
+                    )
+                    yield f"data: {json.dumps({'token': plain}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'done': True, 'output': plain, 'activity_log_id': str(log_row.id), 'thread_id': thread_id, 'duration_ms': log_row.duration_ms or 0}, ensure_ascii=False)}\n\n"
+                    return
+
             history = InMemoryStore.history(thread_id)
             enriched_input = await self.orchestrator.build_enriched_input(agent, payload.input)
-            tool_names = await self.orchestrator.resolve_tool_names(agent, user)
+            tool_names = await self.orchestrator.resolve_tool_names(agent, user, payload.input)
             caps = agent.capabilities or {}
             has_file_context = enriched_input != payload.input
             should_think = caps.get("chat_enabled", True) and (
                 bool(tool_names) or has_file_context
             )
+            if agent.slug == "support" and tool_names:
+                should_think = False
 
             from src.agents_lib.platform_tools import clear_platform_context, set_platform_context
 
             set_platform_context(user)
             try:
-                yield f"data: {json.dumps({'status': 'phase', 'phase': 'preparing', 'message': 'در حال آماده‌سازی درخواست…'}, ensure_ascii=False)}\n\n"
+                is_support_agent = agent.slug == "support"
+                if not is_support_agent:
+                    yield f"data: {json.dumps({'status': 'phase', 'phase': 'preparing', 'message': 'در حال آماده‌سازی درخواست…'}, ensure_ascii=False)}\n\n"
 
-                if should_think:
+                if should_think and not is_support_agent:
                     yield f"data: {json.dumps({'status': 'phase', 'phase': 'thinking', 'message': 'در حال تحلیل و برنامه‌ریزی…'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'thinking_start': True}, ensure_ascii=False)}\n\n"
                     llm = build_llm(agent)
@@ -132,7 +159,12 @@ class InvokeService:
                     yield f"data: {json.dumps({'status': 'phase', 'phase': 'reasoning_complete', 'message': summary}, ensure_ascii=False)}\n\n"
 
                 if tool_names:
-                    yield f"data: {json.dumps({'status': 'phase', 'phase': 'agent_run', 'message': 'در حال اجرای ایجنت و ابزارها…'}, ensure_ascii=False)}\n\n"
+                    # For the support agent, hide internal tool execution details
+                    # from the stream so users never see tool names or internal
+                    # phase labels — only the final LLM prose appears.
+                    is_support = is_support_agent
+                    if not is_support:
+                        yield f"data: {json.dumps({'status': 'phase', 'phase': 'agent_run', 'message': 'در حال اجرای ایجنت و ابزارها…'}, ensure_ascii=False)}\n\n"
                     run_result = None
                     saw_output_token = False
                     async for item in run_react_agent_stream(
@@ -144,12 +176,14 @@ class InvokeService:
                         if item.token:
                             if not saw_output_token:
                                 saw_output_token = True
-                                yield f"data: {json.dumps({'status': 'generating', 'message': 'در حال نوشتن پاسخ…'}, ensure_ascii=False)}\n\n"
+                                if not is_support:
+                                    yield f"data: {json.dumps({'status': 'generating', 'message': 'در حال نوشتن پاسخ…'}, ensure_ascii=False)}\n\n"
                             yield f"data: {json.dumps({'token': item.token}, ensure_ascii=False)}\n\n"
                             await asyncio.sleep(0)
                         elif item.tool_start:
-                            tool_msg = platform_tool_status_fa(item.tool_start)
-                            yield f"data: {json.dumps({'status': 'tool', 'message': tool_msg}, ensure_ascii=False)}\n\n"
+                            if not is_support:
+                                tool_msg = platform_tool_status_fa(item.tool_start)
+                                yield f"data: {json.dumps({'status': 'tool', 'message': tool_msg}, ensure_ascii=False)}\n\n"
                         elif item.result:
                             run_result = item.result
                     if run_result is None:
@@ -163,7 +197,8 @@ class InvokeService:
                     ui_actions = run_result.ui_actions
                     ui_scripts = run_result.ui_scripts
                 else:
-                    yield f"data: {json.dumps({'status': 'generating', 'message': 'در حال نوشتن پاسخ…'}, ensure_ascii=False)}\n\n"
+                    if not is_support_agent:
+                        yield f"data: {json.dumps({'status': 'generating', 'message': 'در حال نوشتن پاسخ…'}, ensure_ascii=False)}\n\n"
                     output_parts: list[str] = []
                     llm = build_llm(agent)
                     messages = build_messages(agent, enriched_input, history)
