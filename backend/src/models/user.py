@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database.base import Base, TimestampMixin, UUIDPkMixin
@@ -35,6 +35,12 @@ class User(Base, UUIDPkMixin, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     address: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # Durable per-user preferences (e.g. support autonomy level). Keep this a flat
+    # bag of small values, not a nested document — the FE reads a handful of keys.
+    preferences_json: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default="{}", nullable=False
+    )
+
     # Relationships
     roles: Mapped[list["Role"]] = relationship(
         "Role",
@@ -50,3 +56,18 @@ class User(Base, UUIDPkMixin, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<User {self.email}>"
+
+    # ── support autonomy preference (Phase 1 M3) ──────────────────
+    @property
+    def support_autonomy_level(self) -> int:
+        raw = (self.preferences_json or {}).get("support_autonomy_level")
+        if isinstance(raw, bool):
+            return 1 if raw else 0
+        if isinstance(raw, int) and 0 <= raw <= 3:
+            return raw
+        return 1
+
+    def set_support_autonomy_level(self, level: int) -> None:
+        if not isinstance(self.preferences_json, dict):
+            self.preferences_json = {}
+        self.preferences_json = {**self.preferences_json, "support_autonomy_level": int(level)}

@@ -1,4 +1,4 @@
-"""Platform settings endpoints — LLM provider toggle (superuser only)."""
+"""Platform settings endpoints — LLM provider toggle + autonomy default."""
 
 from __future__ import annotations
 
@@ -14,6 +14,24 @@ from src.schemas.platform import (
 from src.services.platform_settings_service import PlatformSettingsService
 
 router = APIRouter()
+
+
+@router.get("/feature-flags", response_model=dict)
+async def get_feature_flags(_user: CurrentUser):
+    """Frontend-visible rollout flags (Phase 1 M4.1)."""
+    from src.config import settings
+
+    return {
+        "run_state_v1": settings.run_state_v1,
+        "precision_routing_v1": settings.precision_routing_v1,
+        "graduated_autonomy_v1": settings.graduated_autonomy_v1,
+    }
+
+
+@router.get("/autonomy-default", response_model=dict)
+async def get_autonomy_default(db: DB, _user: CurrentUser):
+    level = await PlatformSettingsService(db).get_autonomy_default()
+    return {"level": level}
 
 
 @router.get("/models", response_model=AvailableModelsRead)
@@ -46,3 +64,9 @@ async def set_llm_provider(payload: LlmProviderUpdate, db: DB, _admin: CurrentSu
         cursor_api_key=payload.cursor_api_key,
         cursor_model=payload.cursor_model,
     )
+
+
+@router.put("/autonomy-default", response_model=dict)
+async def set_autonomy_default(payload: dict, db: DB, _admin: CurrentSuperuser):
+    level = await PlatformSettingsService(db).set_autonomy_default(int(payload.get("level", 1)))
+    return {"level": level}

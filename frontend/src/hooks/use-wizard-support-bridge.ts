@@ -11,6 +11,7 @@ import {
 } from "@/lib/support-wizard-mission";
 import type { SupportPlayerContext } from "@/lib/support-ui-player-context";
 import { setSupportWizardAgentName, readSupportWizardAgentName } from "@/lib/support-wizard-field-heal";
+import { patchRunState, wizardScopeKey } from "@/lib/run-state-client";
 import {
   assertWizardClearOrRecover,
   ensurePermissionsDefault,
@@ -316,6 +317,13 @@ export function useWizardSupportBridge(opts: Opts) {
           await waitForWizardPublishResult(ctx);
           slug = readCreatedAgentSlug();
         }
+        if (slug) {
+          // M1.5 hook point 1 (resume path): mirror verified slug + phase into run state.
+          void patchRunState(
+            { type: "wizard", key: wizardScopeKey() },
+            { slug, phase: "training", payload: { agent_slug_verified: true, source_of_slug: "api" } }
+          ).catch(() => undefined);
+        }
         if (!slug) {
           throw new Error(
             "ایجنت در حال آماده‌سازی است اما شناسه پیدا نشد — لطفاً صفحه را رفرش نکنید و دوباره «ادامه تست» بگویید."
@@ -380,6 +388,11 @@ export function useWizardSupportBridge(opts: Opts) {
           const createdSlug = readCreatedAgentSlug();
           if (createdSlug) {
             bridgePayload.agent_slug = createdSlug;
+            // M1.5 hook point 1: persist verified slug + training phase to run state.
+            void patchRunState(
+              { type: "wizard", key: wizardScopeKey() },
+              { slug: createdSlug, phase: "training", payload: { agent_slug_verified: true, source_of_slug: "api" } }
+            ).catch(() => undefined);
           }
           return;
         } catch (e) {

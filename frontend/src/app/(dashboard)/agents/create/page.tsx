@@ -36,6 +36,7 @@ import {
 import { handleApiError } from "@/lib/api-error-handler";
 import { PanelTransition } from "@/components/motion/transitions";
 import { KindPicker } from "@/components/agents/kind-picker";
+import { PrecisionPicker } from "@/components/agents/precision-picker";
 import { CapabilityToggles } from "@/components/agents/capability-toggles";
 import { WizardField } from "@/components/agents/wizard-field";
 import { WizardStepIntro } from "@/components/agents/wizard-step-intro";
@@ -76,10 +77,13 @@ import {
   KIND_LABELS,
   KIND_PRESETS,
   estimateCostMultiplier,
+  parseExecutionPrecision,
+  precisionForKind,
 } from "@/lib/agent-presets";
 import { EMPTY_KNOWLEDGE_BINDINGS, parseKnowledgeBindings } from "@/lib/agent-knowledge-bindings";
 import { agentToEditorDraft } from "@/lib/agent-editor-state";
 import { scriptSamplesPublishBlock, agentLikelyNeedsScript } from "@/lib/agent-script-samples";
+import { patchRunState, wizardScopeKey } from "@/lib/run-state-client";
 import {
   agentLinksRequired,
   clampCapabilitiesForKind,
@@ -102,18 +106,21 @@ import type {
   AgentPermissionGrantInput,
   AgentPromptTemplate,
   Agent,
+  ExecutionPrecision,
 } from "@/types";
 
 function buildWizardConfigJson(
   plan: AgentWidgetPlan,
-  ioExamples: IoExamples
+  ioExamples: IoExamples,
+  precision: ExecutionPrecision
 ): Record<string, unknown> {
   const base = widgetPlanToConfigJson(plan);
+  const cfg: Record<string, unknown> = { ...base, execution_precision: precision };
   const inputText = ioExamples.inputText.trim();
   const outputText = ioExamples.outputText.trim();
-  if (!inputText && !outputText) return base;
+  if (!inputText && !outputText) return cfg;
   return {
-    ...base,
+    ...cfg,
     io_examples: {
       ...(inputText ? { input_text: inputText } : {}),
       ...(outputText ? { output_text: outputText } : {}),
@@ -197,6 +204,8 @@ export default function AgentWizardPage() {
   const prevStepRef = useRef(0);
 
   const [kind, setKind] = useState<AgentKind>("chat");
+  const [executionPrecision, setExecutionPrecision] =
+    useState<ExecutionPrecision>("autonomous");
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(KIND_PRESETS.chat);
   const [filePolicy, setFilePolicy] = useState<AgentFilePolicy>(DEFAULT_FILE_POLICY);
   const [linkPolicy, setLinkPolicy] = useState<AgentLinkPolicy>({
@@ -468,6 +477,9 @@ export default function AgentWizardPage() {
       setWidgetPlan(draft.widgetPlan);
       setKnowledgeBindings(parseKnowledgeBindings(resumedAgent.config_json));
       setIoExamples(parseIoExamples(resumedAgent.config_json));
+      setExecutionPrecision(
+        parseExecutionPrecision(resumedAgent.config_json) ?? precisionForKind(draft.kind)
+      );
       setPermissions(draft.permissions);
       setPermissionsAllowDefault(draft.permissions.length === 0);
       editHydrated.current = true;
@@ -637,6 +649,7 @@ export default function AgentWizardPage() {
   function applyKind(next: AgentKind, caps: AgentCapabilities) {
     const clamped = clampCapabilitiesForKind(next, caps);
     setKind(next);
+    setExecutionPrecision(precisionForKind(next));
     setCapabilities(clamped);
     if (!clamped.templates_enabled) {
       setTemplates([]);
@@ -830,7 +843,7 @@ export default function AgentWizardPage() {
         links,
         api_bindings: resolvePublishApiBindings(),
         knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
-        config_json: buildWizardConfigJson(widgetPlan, ioExamples),
+        config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision),
       });
       if (permissions.length) {
         await replaceAgentPermissions(updated.id, permissions);
@@ -861,7 +874,7 @@ export default function AgentWizardPage() {
       permissions: permissions.length ? permissions : undefined,
       api_bindings: resolvePublishApiBindings(),
       knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
-      config_json: buildWizardConfigJson(widgetPlan, ioExamples),
+      config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision),
     });
     for (const file of stagedFiles) {
       await uploadAgentFile(agent.id, file);
@@ -887,6 +900,11 @@ export default function AgentWizardPage() {
     } catch {
       /* private mode */
     }
+    // M1.5 hook point 1: persist verified slug + training phase to run state (API is authoritative).
+    void patchRunState(
+      { type: "wizard", key: wizardScopeKey() },
+      { slug: agent.slug, phase: "training", payload: { agent_slug_verified: true, source_of_slug: "api" } }
+    ).catch(() => undefined);
     clearDraft();
     setPublishedAgent(agent);
     try {
@@ -920,15 +938,14 @@ export default function AgentWizardPage() {
     setBootstrapStage("persist");
     try {
       let agent = publishedAgent ?? resumedAgent ?? null;
-      if (!agent) {
+      if (editMode || !agent) {
         agent = await persistAgent();
       }
       setBootstrapStage("runtime");
-      await prepareAgentRuntime(agent.id);
+      agent = await prepareAgentRuntime(agent.id);
       setBootstrapStage("training");
-      await startAgentTraining(agent.id);
-      const fresh = await fetchAgentBySlug(agent.slug);
-      setPublishedAgent(fresh);
+      agent = await startAgentTraining(agent.id);
+      setPublishedAgent(agent);
       if (testingIdx >= 0) setStep(testingIdx);
     } catch (e) {
       const apiErr = handleApiError(e, { event: "agent.wizard.bootstrap" });
@@ -1239,51 +1256,6 @@ export default function AgentWizardPage() {
 
                 {stepIndex === "ورودی و خروجی" && (
                   <div className="space-y-6">
-                    <KindPicker value={kind} onChange={applyKind} />
-                    {(kind !== "chat" || showAdvancedIo) && (
-                      <Card>
-                        <CardHeader>
-                          <h4 className="font-bold">توانایی‌ها و ورودی/خروجی</h4>
-                          <p className="mt-1 text-xs font-normal text-stone-500">
-                            قابلیت‌های اضافه مثل فایل، API و فراخوانی ایجنت.
-                          </p>
-                        </CardHeader>
-                        <CardBody className="space-y-4">
-                          <CapabilityToggles
-                            kind={kind}
-                            value={capabilities}
-                            onChange={updateCapabilities}
-                          />
-                          {shouldShowAgentLinks(kind, capabilities) && (
-                            <LinkedAgentsPicker
-                              agents={allAgents}
-                              links={links}
-                              supervisorMode={kind === "supervisor"}
-                              canCallAgents={capabilities.can_call_agents}
-                              onChange={setLinks}
-                            />
-                          )}
-                        </CardBody>
-                      </Card>
-                    )}
-                    {kind === "chat" && !showAdvancedIo && (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="text-sm"
-                        onClick={() => setShowAdvancedIo(true)}
-                      >
-                        تنظیمات پیشرفته (فایل، API، …)
-                      </Button>
-                    )}
-                    {needsApiStep && (
-                      <div className="space-y-6">
-                        <ExternalApiManager compact />
-                      </div>
-                    )}
-                    {capabilities.file_upload_enabled && (
-                      <FilePolicyForm value={filePolicy} onChange={setFilePolicy} />
-                    )}
                     <WizardIoPanel
                       stagedFiles={stagedFiles}
                       onFilesChange={setStagedFiles}
@@ -1291,6 +1263,81 @@ export default function AgentWizardPage() {
                       ioExamples={ioExamples}
                       onIoExamplesChange={setIoExamples}
                     />
+
+                    <details className="group rounded-2xl border border-stone-200 bg-white shadow-sm">
+                      <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4">
+                        <div>
+                          <span className="text-sm font-bold text-stone-800">
+                            تنظیمات پیشرفته
+                          </span>
+                          <p className="mt-0.5 text-xs text-stone-500">
+                            نوع ایجنت، قابلیت‌ها، API خارجی، سیاست فایل و لینک ایجنت‌ها.
+                          </p>
+                        </div>
+                        <span className="text-xs text-stone-400 transition-transform duration-200 group-open:rotate-180">
+                          ▾
+                        </span>
+                      </summary>
+                      <div className="space-y-4 border-t border-stone-100 px-5 py-5">
+                        {(kind !== "chat" || showAdvancedIo) && (
+                          <Card>
+                            <CardHeader>
+                              <h4 className="font-bold">توانایی‌ها و ورودی/خروجی</h4>
+                              <p className="mt-1 text-xs font-normal text-stone-500">
+                                قابلیت‌های اضافه مثل فایل، API و فراخوانی ایجنت.
+                              </p>
+                            </CardHeader>
+                            <CardBody className="space-y-4">
+                              <CapabilityToggles
+                                kind={kind}
+                                value={capabilities}
+                                onChange={updateCapabilities}
+                              />
+                              {shouldShowAgentLinks(kind, capabilities) && (
+                                <LinkedAgentsPicker
+                                  agents={allAgents}
+                                  links={links}
+                                  supervisorMode={kind === "supervisor"}
+                                  canCallAgents={capabilities.can_call_agents}
+                                  onChange={setLinks}
+                                />
+                              )}
+                            </CardBody>
+                          </Card>
+                        )}
+                        {kind === "chat" && !showAdvancedIo && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="text-sm"
+                            onClick={() => setShowAdvancedIo(true)}
+                          >
+                            تنظیمات پیشرفته (فایل، API، …)
+                          </Button>
+                        )}
+                        {needsApiStep && (
+                          <div className="space-y-6">
+                            <ExternalApiManager compact />
+                          </div>
+                        )}
+                        {capabilities.file_upload_enabled && (
+                          <FilePolicyForm value={filePolicy} onChange={setFilePolicy} />
+                        )}
+                      </div>
+
+                      <div className="border-t border-stone-100 px-5 py-4">
+                        <p className="mb-2 text-xs font-semibold text-stone-600">نوع ایجنت</p>
+                        <KindPicker value={kind} onChange={applyKind} />
+                      </div>
+
+                      <div className="border-t border-stone-100 px-5 py-4">
+                        <p className="mb-2 text-xs font-semibold text-stone-600">دقت اجرا</p>
+                        <PrecisionPicker
+                          value={executionPrecision}
+                          onChange={setExecutionPrecision}
+                        />
+                      </div>
+                    </details>
                   </div>
                 )}
 

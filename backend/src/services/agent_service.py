@@ -23,6 +23,7 @@ from src.services.agent_link_service import AgentLinkService
 from src.services.agent_execution_service import AgentExecutionService
 from src.services.agent_execution_guide_service import mark_execution_guide_generating
 from src.core.catalog import CATALOG_SLUGS
+from src.core.precision_defaults import precision_for_kind
 from src.services.catalog_agent_upgrade_service import (
     mark_catalog_agent_customized,
     widget_plan_for_catalog_entry,
@@ -78,6 +79,8 @@ class AgentService:
             lp = lp.model_dump()
 
         cfg = dict(data.pop("config_json", None) or {})
+        if not cfg.get("execution_precision"):
+            cfg["execution_precision"] = precision_for_kind(payload.kind).value
         cfg["validation"] = {
             **(cfg.get("validation") or {}),
             "state": "runtime_prepare",
@@ -272,7 +275,8 @@ class AgentService:
             setattr(agent, k, v)
             if k in ("capabilities", "file_policy", "agent_link_policy", "config_json", "memory_config"):
                 flag_modified(agent, k)
-        if any(
+
+        needs_rebuild = any(
             k in data
             for k in (
                 "name",
@@ -281,12 +285,26 @@ class AgentService:
                 "kind",
                 "capabilities",
                 "file_policy",
+                "agent_link_policy",
                 "system_prompt",
                 "tool_names",
+                "actions",
+                "templates",
+                "links",
+                "config_json",
             )
-        ):
+        )
+        if needs_rebuild:
             cfg = mark_execution_guide_generating(dict(agent.config_json or {}))
+            cfg["validation"] = {
+                **(cfg.get("validation") or {}),
+                "state": "runtime_prepare",
+                "current_phase": "runtime_prepare",
+                "training_completed": False,
+            }
+            cfg.pop("runtime_plan", None)
             agent.config_json = cfg
+            agent.status = AgentStatus.DEPLOYING
             flag_modified(agent, "config_json")
         if agent.slug in CATALOG_SLUGS and data:
             agent.config_json = mark_catalog_agent_customized(agent.config_json)

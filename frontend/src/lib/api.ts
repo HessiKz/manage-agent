@@ -290,6 +290,36 @@ export async function updateLlmProvider(
   return data;
 }
 
+// ── support autonomy (Phase 1 M3) ──────────────────────────────
+
+export async function fetchUserPreferences(): Promise<User> {
+  const { data } = await api.get<User>("/users/me/preferences");
+  return data;
+}
+
+export async function updateUserPreferences(payload: {
+  support_autonomy_level?: number;
+}): Promise<User> {
+  const { data } = await api.put<User>("/users/me/preferences", payload);
+  return data;
+}
+
+export async function fetchAutonomyDefault(): Promise<{ level: number }> {
+  const { data } = await api.get<{ level: number }>("/platform/autonomy-default");
+  return data;
+}
+
+export type FeatureFlags = {
+  run_state_v1: boolean;
+  precision_routing_v1: boolean;
+  graduated_autonomy_v1: boolean;
+};
+
+export async function fetchFeatureFlags(): Promise<FeatureFlags> {
+  const { data } = await api.get<FeatureFlags>("/platform/feature-flags");
+  return data;
+}
+
 export async function fetchAvailableModels(): Promise<{
   models: string[];
   default: string;

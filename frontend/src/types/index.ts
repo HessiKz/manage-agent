@@ -25,6 +25,8 @@ export type User = {
   is_superuser: boolean;
   mfa_enabled: boolean;
   roles: Role[];
+  preferences_json?: Record<string, unknown>;
+  support_autonomy_level?: number;
   created_at: string;
   updated_at: string;
 };
@@ -33,6 +35,9 @@ export type AgentStatus = "draft" | "active" | "paused" | "error" | "deploying" 
 
 /** Four agent types — file/API/spreadsheet behavior comes from capabilities. */
 export type AgentKind = "chat" | "worker" | "supervisor" | "custom";
+
+/** Precision tiers (stored in config_json.execution_precision). */
+export type ExecutionPrecision = "deterministic" | "guided" | "autonomous";
 
 export type AgentCapabilities = {
   chat_enabled: boolean;

@@ -36,6 +36,15 @@ import {
 import type { ValidationReport } from "@/lib/agent-testing-phase";
 import type { SupportPlayerContext } from "@/lib/support-ui-player-context";
 import type { Agent } from "@/types";
+import { patchRunState, wizardScopeKey } from "@/lib/run-state-client";
+
+// M1.5 hook point 2: advance run state phase after each tool success.
+function recordPhase(phase: string, lastTool?: string): void {
+  const payload = lastTool ? { last_tool: lastTool, last_tool_success: true } : undefined;
+  void patchRunState({ type: "wizard", key: wizardScopeKey() }, { phase, payload }).catch(
+    () => undefined
+  );
+}
 
 async function waitForDashboardReview(slug: string, ctx: SupportPlayerContext): Promise<Agent> {
   await waitUntilOrAskExtend(
@@ -359,14 +368,17 @@ export function useTestingSupportBridge(): void {
           await ctx.setStatus("آموزش از قبل تکمیل شده — ادامه با طراحی پنل…");
         }
       }
+      recordPhase("training", "training.auto_finish");
 
       await ctx.setStatus("مرحله ۲ از ۴: منتظر طراحی پنل توسط سیستم…");
       let agent = await waitForDashboardReview(resolvedSlug, ctx);
       await ctx.wait(800);
+      recordPhase("dashboard");
 
       if (validationAlreadyRunning(agent)) {
         await ctx.setStatus("تست خودکار در حال اجراست — منتظر پایان…");
         await waitForValidationComplete(resolvedSlug, ctx);
+        recordPhase("complete", "continue_testing");
         await ctx.setStatus(`ایجنت «${agent.name}» آماده است`);
         return;
       }
@@ -410,6 +422,7 @@ export function useTestingSupportBridge(): void {
 
       await ctx.setStatus("مرحله ۴ از ۴: تست خودکار در حال اجراست — تا پایان صبر می‌کنم…");
       await waitForValidationComplete(resolvedSlug, ctx);
+      recordPhase("complete", "continue_testing");
       await ctx.setStatus(`ایجنت «${agent.name}» آماده است`);
     });
   }, []);

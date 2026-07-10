@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None  # for OpenAI-compatible gateways (e.g. gapgpt)
     openai_default_model: str = "claude-opus-4-8"
     available_models_csv: str = (
-        "claude-opus-4-8,claude-sonnet-4-6,gpt-4.1,gpt-4.1-mini,gemini-2.5-flash"
+        "claude-opus-4-8,claude-sonnet-4-6,gpt-4.1,gpt-4.1-mini,gemini-2.5-flash,glm-5.2"
     )
     anthropic_api_key: str | None = None
     agent_validation_timeout_seconds: int = 180
@@ -115,6 +115,14 @@ class Settings(BaseSettings):
 
     # ─── Rate limiting ──────────────────────────────────
     rate_limit_per_minute: int = 120
+
+    # ─── Phase 1 rollout flags ───────────────────────────
+    # Default true so already-shipped M1/M2 paths keep working; flip to false to roll back.
+    run_state_v1: bool = True
+    precision_routing_v1: bool = True
+    # Graduated autonomy is new in M3 — default off so it must be explicitly enabled.
+    graduated_autonomy_v1: bool = False
+    graduated_autonomy_v1_l3_flag: bool = False
 
     # ─── Seed admin ─────────────────────────────────────
     first_admin_email: str = "admin@example.com"

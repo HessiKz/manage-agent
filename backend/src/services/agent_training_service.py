@@ -97,10 +97,12 @@ class AgentTrainingService:
         agent = await self.agents.get(agent_id)
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
+
         if agent.status not in (AgentStatus.DRAFT, AgentStatus.DEPLOYING):
             raise HTTPException(status_code=400, detail="Agent is not in a publishable state")
 
         cfg = dict(agent.config_json or {})
+        validation = dict(cfg.get("validation") or {})
         runtime_plan = dict(cfg.get("runtime_plan") or {})
         if not runtime_plan.get("prepared"):
             try:
@@ -113,10 +115,6 @@ class AgentTrainingService:
             runtime_plan = dict(cfg.get("runtime_plan") or {})
             if not runtime_plan.get("prepared"):
                 raise HTTPException(status_code=422, detail=_RUNTIME_PREPARE_MSG)
-        validation = dict(cfg.get("validation") or {})
-        if validation.get("training_completed"):
-            return await AgentService(self.db).get(agent_id)
-
         validation.update(
             {
                 "state": "training",

@@ -84,6 +84,7 @@ async def test_start_training_sets_state():
     assert result.config_json["validation"]["state"] == "training"
 
 
+
 @pytest.mark.asyncio
 async def test_complete_training_rejects_wrong_state():
     agent_id = uuid4()
@@ -125,3 +126,29 @@ async def test_start_validation_blocks_pending_untrained():
     assert schedule is False
     assert result.config_json["validation"]["state"] == "pending"
     assert result.config_json["validation"].get("training_completed") is not True
+
+@pytest.mark.asyncio
+async def test_update_resets_active_agent_for_full_republish():
+    from src.schemas.agent import AgentUpdate
+
+    agent_id = uuid4()
+    agent = MagicMock()
+    agent.id = agent_id
+    agent.slug = "support"
+    agent.status = AgentStatus.ACTIVE
+    agent.config_json = {
+        "validation": {"state": "done", "training_completed": True},
+        "runtime_plan": {"prepared": True},
+    }
+
+    db = AsyncMock()
+    svc = AgentService(db)
+    svc.agents.get = AsyncMock(return_value=agent)
+
+    result = await svc.update(agent_id, AgentUpdate(description="Updated"))
+
+    assert result.status == AgentStatus.DEPLOYING
+    assert result.config_json["validation"]["state"] == "runtime_prepare"
+    assert result.config_json["validation"]["training_completed"] is False
+    assert "runtime_plan" not in result.config_json
+

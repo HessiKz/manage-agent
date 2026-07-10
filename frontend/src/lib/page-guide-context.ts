@@ -228,6 +228,41 @@ function buildSupportContextBlock(
     .join("\n");
 }
 
+export interface RunStateBlockInput {
+  scope_type: string;
+  scope_key: string;
+  phase: string;
+  slug: string | null;
+  wizard_step_index?: number | null;
+  autonomy_level?: number;
+  execution_precision?: string;
+  payload?: Record<string, unknown>;
+}
+
+/**
+ * Machine-readable authoritative run-state block for the support agent.
+ * Insert after the page-context block. The caller fetches RunState once via
+ * `getRunState` (API wins over session); this function only formats it.
+ */
+export function formatRunStateBlock(state: RunStateBlockInput | null): string {
+  if (!state) return "";
+  const slug = state.slug?.trim()
+    ? `slug: ${state.slug} (verified: true, source: api)`
+    : "slug: (none verified)";
+  const lines = [
+    `[RUN STATE — AUTHORITATIVE — DO NOT GUESS]`,
+    `phase: ${state.phase}`,
+    slug,
+    `wizard_step: ${state.wizard_step_index ?? "unknown"}`,
+    `autonomy_level: ${state.autonomy_level ?? 1}`,
+    `execution_precision: ${state.execution_precision ?? "guided"}`,
+  ];
+  if (state.phase === "training" || state.phase === "dashboard" || state.phase === "validation") {
+    lines.push("FORBIDDEN: platform_create_agent");
+  }
+  return lines.join("\n");
+}
+
 export function buildSupportUserMessage(
   pathname: string,
   userText: string,

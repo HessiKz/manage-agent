@@ -1,4 +1,4 @@
-import type { AgentCapabilities, AgentFilePolicy, AgentKind } from "@/types";
+import type { AgentCapabilities, AgentFilePolicy, AgentKind, ExecutionPrecision } from "@/types";
 
 /** Only four agent types — everything else is a capability toggle. */
 export const AGENT_KINDS: AgentKind[] = ["chat", "worker", "supervisor", "custom"];
@@ -9,6 +9,44 @@ export const KIND_LABELS: Record<AgentKind, string> = {
   supervisor: "سرپرست",
   custom: "سفارشی",
 };
+
+export const PRECISION_LABELS: Record<ExecutionPrecision, string> = {
+  deterministic: "قطعی",
+  guided: "هدایت‌شده",
+  autonomous: "خودکار",
+};
+
+export const PRECISION_HELPERS: Record<ExecutionPrecision, string> = {
+  deterministic: "ورودی یکسان → خروجی یکسان؛ بهترین برای قواعد حقوق و اکسل",
+  guided: "هوش مصنوعی با محدودیت؛ بازبینی انسانی توصیه می‌شود",
+  autonomous: "دسترسی کامل به ابزارها؛ ریسک بالاتر",
+};
+
+export const PRECISION_ORDER: ExecutionPrecision[] = [
+  "deterministic",
+  "guided",
+  "autonomous",
+];
+
+const _KIND_DEFAULT_PRECISION: Record<AgentKind, ExecutionPrecision> = {
+  chat: "autonomous",
+  worker: "deterministic",
+  supervisor: "guided",
+  custom: "guided",
+};
+
+/** Mirrors backend `precision_for_kind` in precision_defaults.py. */
+export function precisionForKind(kind: AgentKind): ExecutionPrecision {
+  return _KIND_DEFAULT_PRECISION[kind] ?? "guided";
+}
+
+export function parseExecutionPrecision(
+  config?: Record<string, unknown> | null
+): ExecutionPrecision | null {
+  const raw = config?.execution_precision as string | undefined;
+  if (!raw) return null;
+  return raw in PRECISION_LABELS ? (raw as ExecutionPrecision) : null;
+}
 
 export const KIND_PRESETS: Record<AgentKind, AgentCapabilities> = {
   chat: {

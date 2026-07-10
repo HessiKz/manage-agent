@@ -24,6 +24,7 @@ from src.api.v1 import (
     conversations,
     demo_files,
     client_logs,
+    run_state,
 )
 
 api_router = APIRouter()
@@ -49,3 +50,4 @@ api_router.include_router(prompts.router, tags=["prompts"])
 api_router.include_router(access_requests.router, prefix="/access-requests", tags=["access-requests"])
 api_router.include_router(demo_files.router, tags=["demo-files"])
 api_router.include_router(client_logs.router, prefix="/logs", tags=["logs"])
+api_router.include_router(run_state.router, tags=["run-state"])

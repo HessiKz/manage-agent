@@ -137,9 +137,14 @@ def is_agent_create_request(user_input: str) -> bool:
 
     The command lives in the user-text portion (after '---'), since the
     frontend prepends a page-context block.
+
+    If an authoritative run-state block reports a verified slug, the agent is
+    already persisted — never treat the request as a fresh create.
     """
     text = _user_text_from_input(user_input)
     if is_api_provisioning_request(user_input):
+        return False
+    if run_state_verified_slug(user_input):
         return False
     return bool(_AGENT_CREATE_RE.search(text)) or is_wizard_create_intent(user_input)
 
@@ -171,6 +176,51 @@ def infer_agent_create_defaults(user_input: str) -> dict[str, str]:
 def _page_path_from_context(user_input: str) -> str | None:
     m = re.search(r"مسیر\s*فعلی[:\s]+(/[^\s\n\]]+)", user_input)
     return m.group(1).strip() if m else None
+
+
+_RUN_STATE_BLOCK_RE = re.compile(r"\[RUN STATE[^\]]*\]((?:\n(?!\[RUN STATE).*)*)", re.MULTILINE)
+
+
+def parse_run_state_block(user_input: str) -> dict[str, str] | None:
+    """Parse the machine-readable run-state block the frontend injects.
+
+    Returns {phase, slug, autonomy_level, execution_precision} or None when
+    the block is absent. This is the authoritative source of truth over DOM
+    hints and LLM prose — callers must prefer it over URL/snapshot slugs.
+    """
+    match = _RUN_STATE_BLOCK_RE.search(user_input)
+    if not match:
+        return None
+    out: dict[str, str] = {}
+    for line in match.group(0).splitlines():
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip().lower()
+        val = val.strip()
+        if key in ("phase", "slug", "autonomy_level", "execution_precision"):
+            if key == "slug":
+                # "slug: x (verified: true, source: api)" -> strip the parenthetical
+                val = re.sub(r"\s*\(.*\)\s*$", "", val).strip()
+                if val.startswith("(none"):
+                    val = ""
+            out[key] = val
+    return out or None
+
+
+def run_state_phase(user_input: str) -> str | None:
+    """Authoritative wizard phase from the injected run-state block, if present."""
+    parsed = parse_run_state_block(user_input)
+    return parsed.get("phase") if parsed else None
+
+
+def run_state_verified_slug(user_input: str) -> str | None:
+    """Verified slug only — never trust a URL/snapshot slug when this is set."""
+    parsed = parse_run_state_block(user_input)
+    if not parsed:
+        return None
+    slug = parsed.get("slug", "").strip()
+    return slug or None
 
 
 def is_wizard_create_intent(user_input: str) -> bool:

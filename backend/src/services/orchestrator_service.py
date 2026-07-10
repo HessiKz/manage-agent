@@ -24,6 +24,8 @@ from src.agents_lib.supervisor_graph import run_supervisor
 from src.core.chat_sanitize import sanitize_chat_output
 from src.core.conversation_preview import humanize_output_preview, plain_text_preview
 from src.core.costs import estimate_cost
+from src.core.execution_router import resolve_execution_path, resolve_precision
+from src.core.precision_defaults import ExecutionPath
 from src.core.file_policy import files_count_for_invoke
 from src.core.agent_file_roles import (
     display_agent_filename,
@@ -156,6 +158,21 @@ class OrchestratorService:
         await AgentToolLoader.register_for_agent(self.db, agent, user, depth=0)
         tool_names.extend(await AgentToolLoader.slugs_for_agent(self.db, agent))
         return list(set(tool_names))
+
+    async def _run_react(self, agent, enriched_input, history, tool_names, user):
+        """Wrap run_react_agent with platform context, returning an AgentRunResult."""
+        from src.agents_lib.platform_tools import clear_platform_context, set_platform_context
+
+        set_platform_context(user)
+        try:
+            return await run_react_agent(
+                agent,
+                enriched_input,
+                history,
+                tool_names=list(set(tool_names)),
+            )
+        finally:
+            clear_platform_context()
 
     def finalize_output(self, agent: Agent, output: str) -> str:
         from src.core.agent_workspace_files import finalize_agent_output_text
@@ -302,12 +319,22 @@ class OrchestratorService:
                     return auto_response
 
             caps = _caps(agent)
+            path = resolve_execution_path(agent, payload, caps=caps) if not preview else None
             execution_trace: list[dict] = []
+            if path is not None:
+                execution_trace.append(
+                    trace_step(
+                        "execution_path",
+                        "مسیر اجرا",
+                        detail=path.value,
+                        payload={"precision": resolve_precision(agent).value},
+                    )
+                )
             initial_resolved = llm_runtime.resolve(agent.model_name)
             llm_provider = initial_resolved.provider
             model_name = initial_resolved.model
 
-            if caps.get("supervisor_enabled") and not preview:
+            if path == ExecutionPath.SUPERVISOR and not preview:
                 output = await run_supervisor(
                     self.db,
                     agent,
@@ -316,33 +343,32 @@ class OrchestratorService:
                     depth=depth,
                     thread_id=thread_id,
                 )
-                execution_trace = numbered_trace(
-                    [
-                        trace_step(
-                            "supervisor",
-                            "مسیر سرپرست",
-                            detail=_truncate_text(output, 800),
-                        )
-                    ]
+                execution_trace.append(
+                    trace_step(
+                        "supervisor",
+                        "مسیر سرپرست",
+                        detail=_truncate_text(output, 800),
+                    )
                 )
+                execution_trace = numbered_trace(execution_trace)
+            elif path == ExecutionPath.AUTO_TOOL and not preview:
+                # Deterministic worker path handled above by _try_worker_auto_tool.
+                # If we reach here it means no runtime input file was present;
+                # fall through to ReAct so the agent can still respond.
+                tool_names = await self.resolve_tool_names(agent, user, payload.input)
+                run_result = await self._run_react(agent, enriched_input, history, tool_names, user)
+                output = run_result.output
+                execution_trace += run_result.trace
+                llm_provider = run_result.llm_provider
+                model_name = run_result.model_name
             else:
+                # REACT or PLAIN_LLM (preview always takes this branch).
                 tool_names = [] if preview else await self.resolve_tool_names(agent, user, payload.input)
 
                 if tool_names:
-                    from src.agents_lib.platform_tools import clear_platform_context, set_platform_context
-
-                    set_platform_context(user)
-                    try:
-                        run_result = await run_react_agent(
-                            agent,
-                            enriched_input,
-                            history,
-                            tool_names=list(set(tool_names)),
-                        )
-                    finally:
-                        clear_platform_context()
+                    run_result = await self._run_react(agent, enriched_input, history, tool_names, user)
                     output = run_result.output
-                    execution_trace = run_result.trace
+                    execution_trace += run_result.trace
                     llm_provider = run_result.llm_provider
                     model_name = run_result.model_name
                 else:
@@ -351,16 +377,14 @@ class OrchestratorService:
                     llm_provider = _resolved.provider
                     model_name = _resolved.model
                     messages = build_messages(agent, enriched_input, history)
-                    execution_trace = numbered_trace(
-                        [
-                            trace_step(
-                                "llm_config",
-                                "پیکربندی مدل",
-                                detail=f"{_resolved.provider} · {_resolved.model} · {_resolved.base_url or 'openai'}",
-                            ),
-                            trace_step("llm_request", "درخواست به API مدل", detail="بدون ابزار"),
-                        ]
+                    execution_trace.append(
+                        trace_step(
+                            "llm_config",
+                            "پیکربندی مدل",
+                            detail=f"{_resolved.provider} · {_resolved.model} · {_resolved.base_url or 'openai'}",
+                        )
                     )
+                    execution_trace.append(trace_step("llm_request", "درخواست به API مدل", detail="بدون ابزار"))
                     ai_msg = await llm.ainvoke(messages)
                     output = _normalize_content(getattr(ai_msg, "content", str(ai_msg)))
                     execution_trace.append(

@@ -1,18 +1,38 @@
-"""User endpoints (admin)."""
+"""User endpoints (admin + self preferences)."""
 
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
-from src.api.dependencies import DB, CurrentSuperuser
+from src.api.dependencies import DB, CurrentSuperuser, CurrentUser
 from src.core.security import hash_password
 from src.models.permission import Role
 from src.repositories.user_repo import UserRepository
-from src.schemas.user import UserAdminCreate, UserCreate, UserRead
+from src.schemas.user import UserAdminCreate, UserCreate, UserPreferencesUpdate, UserRead
 from src.services.auth_service import AuthService
 
 router = APIRouter()
+
+
+@router.get("/me/preferences", response_model=UserRead)
+async def my_preferences(user: CurrentUser):
+    """Return the current user (incl. support_autonomy_level + preferences_json)."""
+    return user
+
+
+@router.put("/me/preferences", response_model=UserRead)
+async def update_my_preferences(
+    payload: UserPreferencesUpdate, db: DB, user: CurrentUser
+):
+    from src.services.autonomy_policy_service import AutonomyLevel
+
+    if payload.support_autonomy_level is not None:
+        level = AutonomyLevel.coerce(payload.support_autonomy_level)
+        user.set_support_autonomy_level(level)
+        await db.commit()
+        await db.refresh(user)
+    return user
 
 
 @router.get("", response_model=list[UserRead])

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Pencil } from "lucide-react";
+import { ArrowLeft, Pencil, Power, PowerOff, Trash2 } from "lucide-react";
 import {
   StatCardChart,
   type StatCardChartVariant,
@@ -9,19 +9,37 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
 import { cn, deptLabel, hasMetricSymbols, statusLabel } from "@/lib/utils";
-import type { Agent } from "@/types";
+import type { Agent, ExecutionPrecision } from "@/types";
+
+const PRECISION_BADGE: Record<ExecutionPrecision, { label: string; variant: "default" | "warning" | "danger" | "risk" | "success" | "muted" }> = {
+  deterministic: { label: "قطعی", variant: "muted" },
+  guided: { label: "هدایت‌شده", variant: "default" },
+  autonomous: { label: "خودکار", variant: "risk" },
+};
+
+function precisionBadge(precision?: string) {
+  if (!precision || !(precision in PRECISION_BADGE)) return null;
+  return PRECISION_BADGE[precision as ExecutionPrecision];
+}
 
 export function AgentCard({
   agent,
   runs = 0,
   isNew = false,
   editHref,
+  manage,
 }: {
   agent: Agent;
   runs?: number;
   isNew?: boolean;
   editHref?: string;
+  manage?: {
+    busy?: boolean;
+    onToggleActive?: (agent: Agent) => void;
+    onDelete?: (agent: Agent) => void;
+  };
 }) {
+  const isActive = agent.status === "active";
   return (
     <Card className="h-full transition-[border-color,box-shadow] duration-200 hover:border-brand-300 hover:shadow-glow">
       <CardBody className="flex h-full flex-col space-y-3">
@@ -32,7 +50,11 @@ export function AgentCard({
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
             {isNew && <Badge variant="warning">جدید</Badge>}
-            <Badge variant={agent.status === "active" ? "success" : "muted"}>
+            {(() => {
+              const b = precisionBadge(agent.config_json?.execution_precision as string | undefined);
+              return b ? <Badge key="precision" variant={b.variant}>{b.label}</Badge> : null;
+            })()}
+            <Badge variant={isActive ? "success" : "muted"}>
               {statusLabel(agent.status)}
             </Badge>
           </div>
@@ -42,7 +64,33 @@ export function AgentCard({
         </p>
         <div className="flex items-center justify-between gap-2 text-xs text-stone-500">
           <span>{runs} اجرا</span>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {manage?.onToggleActive && (
+              <button
+                type="button"
+                disabled={manage.busy}
+                onClick={() => manage.onToggleActive?.(agent)}
+                title={isActive ? "غیرفعال کردن" : "فعال کردن"}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                  isActive
+                    ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                )}
+              >
+                {isActive ? (
+                  <>
+                    <PowerOff className="h-3 w-3" />
+                    غیرفعال
+                  </>
+                ) : (
+                  <>
+                    <Power className="h-3 w-3" />
+                    فعال
+                  </>
+                )}
+              </button>
+            )}
             {editHref && (
               <Link
                 href={editHref}
@@ -51,6 +99,18 @@ export function AgentCard({
                 <Pencil className="h-3 w-3" />
                 ویرایش
               </Link>
+            )}
+            {manage?.onDelete && (
+              <button
+                type="button"
+                disabled={manage.busy}
+                onClick={() => manage.onDelete?.(agent)}
+                title="حذف ایجنت"
+                className="inline-flex items-center gap-1 rounded-lg border border-accent-red/30 bg-accent-red/5 px-2 py-1 font-medium text-accent-red transition-colors hover:bg-accent-red/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Trash2 className="h-3 w-3" />
+                حذف
+              </button>
             )}
             <Link
               href={`/agents/${agent.slug}`}

@@ -9,6 +9,7 @@ import { ChatTurn } from "@/components/chat/chat-turn";
 import { SupportActionCard } from "@/components/support/support-action-card";
 import { SupportChoiceBar } from "@/components/support/support-choice-bar";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import { easeOut } from "@/components/motion/variants";
 import {
@@ -24,10 +25,12 @@ import {
   applySupportUiAction,
   buildSupportObservationMessage,
   buildSupportUserMessage,
+  formatRunStateBlock,
   parseSupportHighlight,
   supportActionLabel,
   type SupportUiAction,
 } from "@/lib/page-guide-context";
+import { getRunState, wizardScopeKey, type RunState } from "@/lib/run-state-client";
 import { captureUiSnapshot } from "@/lib/ui-snapshot";
 import type { SupportUiScript, SupportPlayProgress } from "@/lib/support-ui-script";
 import {
@@ -92,7 +95,20 @@ import {
 } from "@/lib/support-chat";
 import { useAuthStore } from "@/stores/auth-store";
 import { AnimatePresence, motion } from "framer-motion";
-import { checkUiAutomationPermission, deriveUserCapabilities } from "@/lib/user-capabilities";
+import { checkUiAutomationPermission, deriveUserCapabilities, pathRequiresSuperuser } from "@/lib/user-capabilities";
+import {
+  AUTONOMY_BLOCKED_FA,
+  AUTONOMY_LABELS,
+  canRunAutomation,
+  coerceLevel,
+  type AutonomyLevel,
+} from "@/lib/autonomy-policy";
+import {
+  fetchAutonomyDefault,
+  fetchUserPreferences,
+  updateUserPreferences,
+} from "@/lib/api";
+import { useFeatureFlag } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
 import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 import {
@@ -203,6 +219,46 @@ export function PlatformSupportAssistant() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { playScript, playing: uiPlaying, stopScript } = useSupportUiPlayer();
+  const runStateRef = useRef<RunState | null>(null);
+
+  // Effective support autonomy level (plan M3.1): session override > user pref > org default.
+  const [orgAutonomyDefault, setOrgAutonomyDefault] = useState<AutonomyLevel>(1);
+  const graduatedAutonomyEnabled = useFeatureFlag("graduated_autonomy_v1");
+  const { data: myPreferences } = useQuery({
+    queryKey: ["user-preferences"],
+    queryFn: fetchUserPreferences,
+    staleTime: 2 * 60_000,
+    enabled: graduatedAutonomyEnabled,
+  });
+  useEffect(() => {
+    let active = true;
+    fetchAutonomyDefault()
+      .then((d) => {
+        if (active) setOrgAutonomyDefault(coerceLevel(d.level));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const effectiveAutonomy = (): AutonomyLevel => {
+    if (!graduatedAutonomyEnabled) return 2; // legacy: admins run bridges (already role-gated)
+    const sessionOverride = runStateRef.current?.payload?.autonomy_level;
+    if (sessionOverride !== undefined && sessionOverride !== null) {
+      return coerceLevel(sessionOverride);
+    }
+    if (myPreferences?.support_autonomy_level !== undefined) {
+      return coerceLevel(myPreferences.support_autonomy_level);
+    }
+    return orgAutonomyDefault;
+  };
+
+  const refreshRunState = useCallback(async () => {
+    const key = wizardScopeKey();
+    if (!key) return;
+    runStateRef.current = await getRunState({ type: "wizard", key });
+  }, []);
 
   const { data: agent } = useQuery({
     queryKey: ["support-agent", SUPPORT_SLUG],
@@ -389,6 +445,50 @@ export function PlatformSupportAssistant() {
         });
         setError(denial);
         return false;
+      }
+
+      // Graduated autonomy gate (plan M3.3): bridge/full actions need L2/L3.
+      // Skipped entirely when the rollout flag is off (legacy role/capability behavior).
+      if (graduatedAutonomyEnabled) {
+        const autonomy = effectiveAutonomy();
+        const hasBridge = Boolean(script?.steps.some((s) => s.type === "bridge"));
+        const needsFull = Boolean(
+          script?.steps.some(
+            (s) => s.type === "navigate" && pathRequiresSuperuser(s.path)
+          )
+        );
+        if (needsFull && !canRunAutomation(autonomy, "full")) {
+          setMessages((m) => {
+            const copy = [...m];
+            const last = copy[copy.length - 1];
+            if (last?.role === "assistant") {
+              copy[copy.length - 1] = {
+                ...last,
+                content: `⚠ ${AUTONOMY_BLOCKED_FA}`,
+                uiTask: undefined,
+              };
+            }
+            return copy;
+          });
+          setError(AUTONOMY_BLOCKED_FA);
+          return false;
+        }
+        if (hasBridge && !canRunAutomation(autonomy, "bridge")) {
+          setMessages((m) => {
+            const copy = [...m];
+            const last = copy[copy.length - 1];
+            if (last?.role === "assistant") {
+              copy[copy.length - 1] = {
+                ...last,
+                content: `⚠ ${AUTONOMY_BLOCKED_FA}`,
+                uiTask: undefined,
+              };
+            }
+            return copy;
+          });
+          setError(AUTONOMY_BLOCKED_FA);
+          return false;
+        }
       }
 
       try {
@@ -757,6 +857,20 @@ export function PlatformSupportAssistant() {
       if (livePath.startsWith("/agents/create") && isWizardContinueIntent(text)) {
         const localScript = await resolveLocalWizardContinueScript(livePath);
         if (localScript) {
+          // Local continue runs a bridge (continue_testing) — requires autonomy L2+
+          // when graduated autonomy is enabled; otherwise legacy behavior runs it.
+          if (graduatedAutonomyEnabled && effectiveAutonomy() < 2) {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "assistant",
+                content: `⚠ ${AUTONOMY_BLOCKED_FA}`,
+                isStreaming: false,
+              },
+            ]);
+            setError(AUTONOMY_BLOCKED_FA);
+            return;
+          }
           const pageState = inspectWizardCreatePage(livePath);
           const intro =
             pageState === "wizard_steps_incomplete"
@@ -776,7 +890,10 @@ export function PlatformSupportAssistant() {
         }
       }
 
+      await refreshRunState();
+      const runBlock = formatRunStateBlock(runStateRef.current);
       let payload = buildSupportUserMessage(pathname, text, isAdmin, captureUiSnapshot());
+      if (runBlock) payload = `${payload}\n\n${runBlock}`;
       const threadId = supportThreadIdRef.current ?? activeThreadId;
       if (!threadId) {
         setLoading(false);
@@ -809,12 +926,15 @@ export function PlatformSupportAssistant() {
           if (!continueLoop) break;
 
           await new Promise((r) => setTimeout(r, 400));
+          await refreshRunState();
           payload = buildSupportObservationMessage(
             window.location.pathname,
             isAdmin,
             "بررسی نتیجه — اگر کار تمام است خلاصه بده، وگرنه مرحله UI بعدی",
             captureUiSnapshot()
           );
+          const loopRunBlock = formatRunStateBlock(runStateRef.current);
+          if (loopRunBlock) payload = `${payload}\n\n${loopRunBlock}`;
           loop += 1;
         }
 
@@ -855,6 +975,7 @@ export function PlatformSupportAssistant() {
       stopScript,
       activeThreadId,
       uiPlaying,
+      refreshRunState,
     ]
   );
 
@@ -1015,6 +1136,11 @@ export function PlatformSupportAssistant() {
                 <p className="text-sm font-bold text-stone-900">راهنمای پلتفرم</p>
                 <p className="text-xs text-stone-500">بر اساس صفحه فعلی شما</p>
               </div>
+              {graduatedAutonomyEnabled && (
+                <Badge variant={effectiveAutonomy() >= 2 ? "success" : "muted"}>
+                  خودمختاری: {AUTONOMY_LABELS[effectiveAutonomy()]}
+                </Badge>
+              )}
               <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"

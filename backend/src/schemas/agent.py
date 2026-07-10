@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 from src.config import settings
 
 from src.models.agent import AgentKind, AgentStatus, canonical_agent_kind
+from src.core.precision_defaults import validate_execution_precision
 from src.models.agent_link import AgentLinkType
 from src.schemas.agent_action import AgentActionCreate, AgentActionRead
 from src.schemas.agent_capabilities import (
@@ -196,6 +197,11 @@ class AgentCreate(AgentBase):
             raise ValueError("can_call_agents requires at least one tool agent link")
         return self
 
+    @model_validator(mode="after")
+    def validate_execution_precision_tier(self) -> "AgentCreate":
+        validate_execution_precision(self.config_json)
+        return self
+
 
 class AgentUpdate(BaseModel):
     name: str | None = None
@@ -256,6 +262,11 @@ class AgentUpdate(BaseModel):
     def validate_file_policy_when_upload(self) -> "AgentUpdate":
         if self.capabilities is not None and self.file_policy is not None:
             _validate_file_policy_when_upload(self.capabilities, self.file_policy)
+        return self
+
+    @model_validator(mode="after")
+    def validate_execution_precision_tier(self) -> "AgentUpdate":
+        validate_execution_precision(self.config_json)
         return self
 
 

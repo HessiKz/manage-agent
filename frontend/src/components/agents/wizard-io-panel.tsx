@@ -26,25 +26,6 @@ export function WizardIoPanel({
 }: Props) {
   return (
     <div className="grid gap-6 md:grid-cols-2">
-      <section className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50/50 p-4">
-        <h4 className="text-sm font-bold text-stone-800">خروجی ایجنت</h4>
-        <p className="text-xs text-stone-500">نمونه خروجی مورد انتظار — متن یا فایل</p>
-        <Textarea
-          rows={3}
-          placeholder="مثال خروجی یا توضیح فرمت…"
-          value={ioExamples.outputText}
-          onChange={(e) =>
-            onIoExamplesChange({ ...ioExamples, outputText: e.target.value })
-          }
-        />
-        <WizardStagedFiles
-          files={stagedFiles}
-          onChange={onFilesChange}
-          filePolicy={filePolicy}
-          mode="output"
-          title="فایل نمونه خروجی"
-        />
-      </section>
       <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
         <h4 className="text-sm font-bold text-stone-800">ورودی ایجنت</h4>
         <p className="text-xs text-stone-500">نمونه ورودی — متن یا فایل</p>
@@ -62,6 +43,25 @@ export function WizardIoPanel({
           filePolicy={filePolicy}
           mode="input"
           title="فایل نمونه ورودی"
+        />
+      </section>
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-stone-50/50 p-4">
+        <h4 className="text-sm font-bold text-stone-800">خروجی ایجنت</h4>
+        <p className="text-xs text-stone-500">نمونه خروجی مورد انتظار — متن یا فایل</p>
+        <Textarea
+          rows={3}
+          placeholder="مثال خروجی یا توضیح فرمت…"
+          value={ioExamples.outputText}
+          onChange={(e) =>
+            onIoExamplesChange({ ...ioExamples, outputText: e.target.value })
+          }
+        />
+        <WizardStagedFiles
+          files={stagedFiles}
+          onChange={onFilesChange}
+          filePolicy={filePolicy}
+          mode="output"
+          title="فایل نمونه خروجی"
         />
       </section>
     </div>

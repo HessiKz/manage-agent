@@ -62,5 +62,13 @@ class UserRead(UserBase):
     is_superuser: bool
     mfa_enabled: bool
     roles: list[RoleRead] = []
+    preferences_json: dict = {}
+    support_autonomy_level: int = 1
     created_at: datetime
     updated_at: datetime
+
+
+class UserPreferencesUpdate(BaseModel):
+    """Update the current user's durable preferences (Phase 1 M3)."""
+
+    support_autonomy_level: int | None = Field(None, ge=0, le=3)

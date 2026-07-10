@@ -3,7 +3,6 @@
 import { Bot, GitBranch, MessageSquare, Sliders } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AGENT_KINDS, KIND_LABELS, KIND_PRESETS } from "@/lib/agent-presets";
-import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import type { AgentCapabilities, AgentKind } from "@/types";
 
 const KIND_META: Record<
@@ -23,40 +22,44 @@ type Props = {
 
 export function KindPicker({ value, onChange }: Props) {
   return (
-    <Stagger initial={false} className="grid gap-3 sm:grid-cols-2">
+    <div
+      role="tablist"
+      aria-label="نوع ایجنت"
+      className="flex flex-wrap gap-2 rounded-2xl border border-stone-200 bg-white p-2"
+    >
       {AGENT_KINDS.map((kind) => {
         const { icon: Icon, desc } = KIND_META[kind];
+        const selected = value === kind;
         return (
-          <StaggerItem key={kind} variant="scaleIn">
-            <button
-              type="button"
-              data-ma-support={`wizard-kind-${kind}`}
-              onClick={() => onChange(kind, { ...KIND_PRESETS[kind] })}
-              className={cn(
-                "w-full rounded-2xl border p-4 text-right transition-colors duration-150",
-                value === kind
-                  ? "border-brand-500 bg-brand-50/60 shadow-sm"
-                  : "border-stone-200 bg-white hover:border-brand-300 hover:bg-brand-50/30"
-              )}
-            >
-              <div className="flex items-start gap-3">
-                <div
-                  className={cn(
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-                    value === kind ? "bg-brand-600 text-white" : "bg-brand-100 text-brand-700"
-                  )}
-                >
-                  <Icon className="h-5 w-5" aria-hidden />
-                </div>
-                <div className="min-w-0">
-                  <p className="font-bold text-stone-900">{KIND_LABELS[kind]}</p>
-                  <p className="mt-0.5 text-xs text-stone-500">{desc}</p>
-                </div>
-              </div>
-            </button>
-          </StaggerItem>
+          <button
+            key={kind}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            data-ma-support={`wizard-kind-${kind}`}
+            onClick={() => onChange(kind, { ...KIND_PRESETS[kind] })}
+            className={cn(
+              "group flex min-w-[7.5rem] flex-1 items-center gap-2 rounded-xl px-3 py-2.5 text-right transition-colors duration-150",
+              selected
+                ? "bg-brand-600 text-white shadow-sm"
+                : "text-stone-600 hover:bg-brand-50/60 hover:text-brand-700"
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" aria-hidden />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold leading-tight">{KIND_LABELS[kind]}</p>
+              <p
+                className={cn(
+                  "mt-0.5 hidden text-[11px] leading-tight sm:block",
+                  selected ? "text-brand-100" : "text-stone-400"
+                )}
+              >
+                {desc}
+              </p>
+            </div>
+          </button>
         );
       })}
-    </Stagger>
+    </div>
   );
 }

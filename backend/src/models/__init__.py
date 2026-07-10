@@ -21,6 +21,7 @@ from src.models.knowledge_dataset import KnowledgeDataset
 from src.models.external_api import ExternalApiEndpoint, ExternalApiService
 from src.models.notification import Notification
 from src.models.platform_setting import PlatformSetting
+from src.models.run_state import RunState, RunStatePhase, RunStateScope
 from src.models.user import User
 
 __all__ = [
@@ -51,4 +52,7 @@ __all__ = [
     "ExternalApiEndpoint",
     "DocumentChunk",
     "KnowledgeDataset",
+    "RunState",
+    "RunStateScope",
+    "RunStatePhase",
 ]
