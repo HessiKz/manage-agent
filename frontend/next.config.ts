@@ -9,8 +9,8 @@ const LONG_PROXY_TIMEOUT_MS =
   Number(process.env.NEXT_PUBLIC_API_LONG_TIMEOUT_MS) || 600_000;
 
 const config: NextConfig = {
-  // Standalone is for Docker; Vercel/Railway use their own output pipeline
-  ...(isHostedFrontend ? {} : { output: "standalone" as const }),
+  // Standalone output required for Docker
+  output: "standalone" as const,
   reactStrictMode: true,
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts"],

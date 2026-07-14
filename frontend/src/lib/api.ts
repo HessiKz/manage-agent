@@ -67,10 +67,10 @@ export const api = axios.create({
   timeout: DEFAULT_TIMEOUT_MS,
 });
 
-/** Agent invoke / actions — can run for several minutes */
+/** Agent invoke / training / long operations — no client timeout; nginx enforces 600s */
 const apiLong = axios.create({
   withCredentials: false,
-  timeout: LONG_TIMEOUT_MS,
+  timeout: 0,
 });
 
 if (typeof window !== "undefined") {
@@ -1059,7 +1059,7 @@ export async function prepareAgentRuntime(agentId: string): Promise<Agent> {
 }
 
 export async function startAgentTraining(agentId: string): Promise<Agent> {
-  const { data } = await api.post<Agent>(`/agents/${agentId}/training/start`);
+  const { data } = await apiLong.post<Agent>(`/agents/${agentId}/training/start`);
   return normalizeAgent(data);
 }
 
@@ -1106,7 +1106,7 @@ export async function fetchAgentFiles(agentId: string): Promise<AgentFile[]> {
 export async function uploadAgentFile(agentId: string, file: File): Promise<AgentFile> {
   const form = new FormData();
   form.append("file", file);
-  const { data } = await api.post<AgentFile>(`/agents/${agentId}/files`, form, {
+  const { data } = await apiLong.post<AgentFile>(`/agents/${agentId}/files`, form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data;

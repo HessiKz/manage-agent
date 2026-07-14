@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from src.api.dependencies import CurrentSuperuser, CurrentUser, DB
 from src.agents_lib.tool_registry import ToolRegistry
 from src.schemas.activity import ActivityLogRead
+from sqlalchemy.orm.attributes import flag_modified
 from src.schemas.agent_dashboard import AgentDashboardRead
 from src.schemas.agent_execution import AgentExecutionGuideStatusRead, AgentExecutionRead
 from src.schemas.agent import (

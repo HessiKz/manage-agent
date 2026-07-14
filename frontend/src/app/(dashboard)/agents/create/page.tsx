@@ -1102,16 +1102,10 @@ export default function AgentWizardPage() {
       if (testingIdx >= 0) setStep(testingIdx);
     } catch (e) {
       const apiErr = handleApiError(e, { event: "agent.wizard.bootstrap" });
-      const isTimeout =
-        /timeout/i.test(apiErr.message) ||
-        apiErr.code === "ECONNABORTED" ||
-        apiErr.status === 0;
-      const detail = isTimeout
-        ? "آماده‌سازی بیش از حد طول کشید (timeout). معمولاً به‌خاطر تولید اسکریپت با مدل است؛ دوباره تلاش کنید. اگر باز هم رخ داد، فایل‌های نمونه را کم‌حجم‌تر کنید یا بعداً در تست خودکار صبر کنید."
-        : apiErr.requestId
-          ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
-          : apiErr.message;
-      pushBootstrap("persist", `خطا: ${isTimeout ? "timeout" : apiErr.message}`);
+      const detail = apiErr.requestId
+        ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
+        : apiErr.message;
+      pushBootstrap("persist", `خطا: ${apiErr.message}`);
       await appAlert({
         title: "خطا در آماده‌سازی تست",
         message: detail,
