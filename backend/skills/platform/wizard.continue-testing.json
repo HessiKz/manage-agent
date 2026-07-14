@@ -1,0 +1,58 @@
+{
+  "slug": "wizard.continue-testing",
+  "name": "Continue testing without rebuilding",
+  "name_fa": "ادامه تست بدون ساخت مجدد",
+  "description": "Resume interactive training / dashboard design / approval for an already-persisted agent instead of re-walking wizard steps 1-5.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["post_publish", "testing", "training", "dashboard", "planning"],
+    "intent_regex": "ادامه|continue|go\\s*on|ادامه\\s*(?:بده|کن|ده)",
+    "run_state": { "slug_verified": true },
+    "min_autonomy_level": 2,
+    "priority": 100
+  },
+  "procedure": {
+    "label": "ادامه تست بدون ساخت مجدد",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.continue_testing",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "آموزش، پنل، تست"
+      }
+    ]
+  },
+  "content_md": "When the run state reports a persisted agent slug (slug_verified=true) and the user asks to continue, resume training/dashboard/approval directly via the wizard.continue_testing bridge. Never re-walk wizard steps 1-5."
+}
+{
+  "slug": "wizard.continue-testing",
+  "name": "Continue testing without rebuilding",
+  "name_fa": "ادامه تست بدون ساخت مجدد",
+  "description": "Resume interactive training / dashboard design / approval for an already-persisted agent instead of re-walking wizard steps 1-5.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["post_publish", "testing", "training", "dashboard", "planning"],
+    "intent_regex": "ادامه|continue|go\\s*on|ادامه\\s*(?:بده|کن|ده)",
+    "run_state": { "slug_verified": true },
+    "min_autonomy_level": 2,
+    "priority": 100
+  },
+  "procedure": {
+    "label": "ادامه تست بدون ساخت مجدد",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.continue_testing",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "آموزش، پنل، تست"
+      }
+    ]
+  },
+  "content_md": "When the run state reports a persisted agent slug (slug_verified=true) and the user asks to continue, resume training/dashboard/approval directly via the wizard.continue_testing bridge. Never re-walk wizard steps 1-5."
+}

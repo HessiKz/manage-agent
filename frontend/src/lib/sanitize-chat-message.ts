@@ -8,6 +8,36 @@ const ORPHAN_FENCE_LINE = /^:::+\s*\w*\s*$/gm;
 const THINK_BLOCK = /[\s\S]*?<\/think>/gi;
 const THINK_XML = /<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi;
 
+/** Gateway routing tags e.g. "[MIX → se/pie/grok-4.5]" — keep in sync with backend. */
+const GATEWAY_ROUTE_TAG =
+  /\[\s*(?:MIX|mix|Mix|[A-Za-z][\w.\-/]*)\s*(?:→|->|–|—|-)\s*[^\]\n]{1,200}\s*\]/g;
+
+/**
+ * Remove MIX/router gateway tags. When `collapse` is false, preserve surrounding
+ * whitespace (safe for stream chunks). Also holds back incomplete trailing tags.
+ */
+export function stripGatewayRouteTags(text: string, collapse = true): string {
+  let cleaned = (text || "").replace(GATEWAY_ROUTE_TAG, "");
+  const openAt = cleaned.lastIndexOf("[");
+  if (openAt >= 0 && !cleaned.slice(openAt).includes("]")) {
+    const tail = cleaned.slice(openAt);
+    if (
+      /^\[\s*(?:M(?:I(?:X)?)?|mix|Mix|[A-Za-z][\w.\-/]*)?(?:\s*(?:→|->|–|—|-)\s*[^\]\n]*)?$/.test(
+        tail
+      )
+    ) {
+      cleaned = cleaned.slice(0, openAt);
+    }
+  }
+  if (collapse) {
+    cleaned = cleaned
+      .replace(/^[ \t]+$/gm, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return cleaned;
+}
+
 const PREFERRED_FENCE_LABELS = [
   "writing",
   "reply",
@@ -67,6 +97,7 @@ export function sanitizeChatMessage(text: string, role: "user" | "assistant"): s
   if (!text || role !== "assistant") return text;
 
   let cleaned = text.trim();
+  cleaned = stripGatewayRouteTags(cleaned);
   cleaned = stripReasoningWrappers(cleaned);
 
   const fenced = extractFencedContent(cleaned);

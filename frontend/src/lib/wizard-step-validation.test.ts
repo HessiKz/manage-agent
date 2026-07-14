@@ -6,7 +6,7 @@ import {
   getStepBlockMessage,
   type WizardStepContext,
 } from "@/lib/wizard-step-validation";
-import { DEFAULT_FILE_POLICY, KIND_PRESETS } from "@/lib/agent-presets";
+import { asIoFilePolicy, DEFAULT_FILE_POLICY, KIND_PRESETS } from "@/lib/agent-presets";
 import { defaultWidgetPlan } from "@/lib/widget-plan";
 
 function baseCtx(overrides: Partial<WizardStepContext> = {}): WizardStepContext {
@@ -16,7 +16,7 @@ function baseCtx(overrides: Partial<WizardStepContext> = {}): WizardStepContext 
     nameChecking: false,
     kind: "chat",
     capabilities: KIND_PRESETS.chat,
-    filePolicy: DEFAULT_FILE_POLICY,
+    filePolicy: asIoFilePolicy(DEFAULT_FILE_POLICY),
     stagedFiles: [],
     actions: [],
     links: [],

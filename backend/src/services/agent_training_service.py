@@ -103,6 +103,12 @@ class AgentTrainingService:
 
         cfg = dict(agent.config_json or {})
         validation = dict(cfg.get("validation") or {})
+        planning = dict(validation.get("planning") or {})
+        if planning.get("awaiting_answers"):
+            raise HTTPException(
+                status_code=400,
+                detail="ابتدا به سؤالات تحلیل پاسخ دهید؛ سپس تست تعاملی شروع می‌شود.",
+            )
         runtime_plan = dict(cfg.get("runtime_plan") or {})
         if not runtime_plan.get("prepared"):
             try:

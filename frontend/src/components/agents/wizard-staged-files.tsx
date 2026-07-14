@@ -3,10 +3,12 @@
 import { Upload, X } from "lucide-react";
 import { appAlert } from "@/lib/app-dialog";
 import {
+  agentFileRoleFromName,
   asOutputSampleFile,
   displayAgentFileName,
   isOutputSampleFileName,
   isRuntimeSampleFileName,
+  roleBadgeLabel,
 } from "@/lib/agent-file-roles";
 import {
   validateFileAgainstPolicy,
@@ -89,9 +91,9 @@ export function WizardStagedFiles({
 
   const defaultDescription =
     mode === "input"
-      ? "فایل خام یا ورودی واقعی که کاربر آپلود می‌کند (مثلاً اکسل کارکرد)."
+      ? "فایل خام یا ورودی واقعی که کاربر آپلود می‌کند (هر نوع دامنه — اکسل، CSV، …)."
       : mode === "output"
-        ? "نمونه خروجی مورد انتظار — مثلاً فایل پردازش‌شده خانم فاطمی."
+        ? "نمونه خروجی مورد انتظار (طلایی) — ساختار و مقادیر هدف برای آموزش اسکریپت."
         : optional
           ? "اگر ایجنت باید فرمت خاصی را دنبال کند، یک فایل نمونه بگذارید."
           : "فایل نمونه بعد از انتشار به ایجنت پیوست می‌شود.";
@@ -133,8 +135,11 @@ export function WizardStagedFiles({
               key={`${f.name}-${f.size}-${i}`}
               className="flex items-center justify-between rounded-lg border border-stone-100 bg-white px-3 py-2 text-xs"
             >
-              <span className="truncate font-medium text-stone-700">
-                {displayAgentFileName(f.name)}
+              <span className="flex min-w-0 items-center gap-2 truncate font-medium text-stone-700">
+                <span className="shrink-0 rounded-full bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium text-stone-500">
+                  {roleBadgeLabel(agentFileRoleFromName(f.name))}
+                </span>
+                <span className="truncate">{displayAgentFileName(f.name)}</span>
               </span>
               <div className="flex shrink-0 items-center gap-2">
                 <span className="text-stone-400">{Math.round(f.size / 1024)}KB</span>

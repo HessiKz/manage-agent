@@ -10,6 +10,8 @@ import type { AgentFilePolicy } from "@/types";
 type Props = {
   value: AgentFilePolicy;
   onChange: (policy: AgentFilePolicy) => void;
+  /** Role label shown to admins (input/output). */
+  mode?: "input" | "output";
 };
 
 export function validateFilePolicy(policy: AgentFilePolicy): string | null {
@@ -27,7 +29,7 @@ export function validateFilePolicy(policy: AgentFilePolicy): string | null {
   return null;
 }
 
-export function FilePolicyForm({ value, onChange }: Props) {
+export function FilePolicyForm({ value, onChange, mode }: Props) {
   const error = useMemo(() => validateFilePolicy(value), [value]);
 
   function toggleMime(mime: string, ext: string) {
@@ -105,6 +107,28 @@ export function FilePolicyForm({ value, onChange }: Props) {
       </StaggerItem>
 
       <StaggerItem variant="slideUp">
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50/60 px-3 py-2.5">
+          <div className="leading-relaxed">
+            <p className="text-sm font-semibold text-stone-800">همه نوع فایل</p>
+            <p className="text-xs text-stone-500">
+              وقتی فعال باشد، محدودیت نوع فایل نادیده گرفته می‌شود و فقط سقف حجم/تعداد اعمال می‌شود.
+            </p>
+          </div>
+          <label className="flex shrink-0 items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={Boolean(value.allow_all_types)}
+              onChange={(e) =>
+                onChange({ ...value, allow_all_types: e.target.checked })
+              }
+              className="accent-brand-600"
+            />
+            <span className="text-stone-600">همه نوع فایل</span>
+          </label>
+        </div>
+      </StaggerItem>
+
+      <StaggerItem variant="slideUp" className={cn(value.allow_all_types && "pointer-events-none opacity-40")}>
         <p className="text-sm font-semibold text-stone-800">نوع فایل مجاز</p>
         <p className="text-xs text-stone-500">روی هر نوع کلیک کنید تا فعال یا غیرفعال شود.</p>
         <div className="mt-2 flex flex-wrap gap-2">

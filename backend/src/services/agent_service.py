@@ -233,10 +233,35 @@ class AgentService:
         planning["answers"] = {k: str(v).strip() for k, v in answers.items()}
         planning["awaiting_answers"] = False
         validation["planning"] = planning
-        validation["state"] = "running"
-        validation["current_phase"] = "planning"
+        # After planning answers: open interactive training (not full auto-validation).
+        # Script re-synth happens later when automated validation runs post-training.
+        validation["state"] = "training"
+        validation["current_phase"] = "training"
+        validation["training_completed"] = False
+        validation["current_detail"] = "پاسخ‌ها ذخیره شد — تست تعاملی را شروع کنید."
+        # Planning answers must retrain the script later: clear pin.
+        ws = dict(cfg.get("workspace_script") or {})
+        if ws:
+            ws.pop("verified_at", None)
+            ws.pop("sample_hash", None)
+            cfg["workspace_script"] = ws
         cfg["validation"] = validation
         agent.config_json = cfg
+        try:
+            from src.services.agent_validation_service import AgentValidationService
+
+            AgentValidationService(self.db)._stamp_planning_answers(agent, planning)
+            # re-apply training handoff after stamp mutates config_json
+            cfg = dict(agent.config_json or {})
+            v = dict(cfg.get("validation") or {})
+            v["planning"] = planning
+            v["state"] = "training"
+            v["current_phase"] = "training"
+            v["training_completed"] = False
+            cfg["validation"] = v
+            agent.config_json = cfg
+        except Exception:  # noqa: BLE001
+            pass
         agent.status = AgentStatus.DEPLOYING
         flag_modified(agent, "config_json")
         await self.db.commit()

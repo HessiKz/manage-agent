@@ -104,7 +104,22 @@ def _infer_role_from_text(text: str) -> str | None:
 _TOOL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "resume_screen": ("رزومه", "resume", "cv", "غربال", "screen", "کاندید", "مصاحبه"),
     "report_generate": ("فیش", "گزارش", "report", "pdf", "حقوق", "payroll", "payslip", "فاکتور"),
-    "karkard_process": ("کارکرد", "karkard", "اکسل", "xlsx", "spreadsheet"),
+    "run_agent_script": (
+        "فایل",
+        "file",
+        "xlsx",
+        "xls",
+        "csv",
+        "spreadsheet",
+        "excel",
+        "اکسل",
+        "پردازش",
+        "transform",
+        "script",
+        "output",
+        "خروجی",
+        "ورودی",
+    ),
     "hr_lookup": ("پرسنل", "کارمند", "employee", "hr", "حقوق پرسنل"),
     "budget_lookup": ("بودجه", "budget", "هزینه"),
     "crm_lookup": ("crm", "مشتری", "customer", "تیکت"),
@@ -161,8 +176,24 @@ def select_tools_for_request(user_input: str, tool_names: list[str]) -> list[str
         if any(w in lower for w in ("report_generate", "فیش", "گزارش", "pdf")):
             if "report_generate" in tool_names:
                 return ["report_generate"]
-        if "karkard_process" in tool_names and any(w in lower for w in ("karkard", "کارکرد", "file")):
-            return ["karkard_process"]
+        if "run_agent_script" in tool_names and any(
+            w in lower
+            for w in (
+                "file",
+                "xlsx",
+                "xls",
+                "csv",
+                "excel",
+                "spreadsheet",
+                "process",
+                "script",
+                "transform",
+                "فایل",
+                "اکسل",
+                "پردازش",
+            )
+        ):
+            return ["run_agent_script"]
         return []
 
     scores: dict[str, int] = {}
@@ -201,16 +232,14 @@ def _default_args(tool_name: str, ctx: dict[str, Any], user_input: str) -> dict[
         if isinstance(period, int):
             period = f"{period}/12"
         return {"report_type": str(report_type), "period": str(period)}
-    if tool_name == "karkard_process":
+    if tool_name == "run_agent_script":
         args: dict[str, Any] = {}
         if ctx.get("storage_path"):
             args["storage_path"] = ctx["storage_path"]
         if ctx.get("agent_id"):
             args["agent_id"] = str(ctx["agent_id"])
-        if ctx.get("jalali_year") is not None:
-            args["jalali_year"] = int(ctx["jalali_year"])
-        if ctx.get("company_name"):
-            args["company_name"] = ctx["company_name"]
+        if ctx.get("script_slug"):
+            args["script_slug"] = ctx["script_slug"]
         return args
     if tool_name == "hr_lookup":
         return {"employee_id": str(ctx.get("employee_id", "E-1001"))}
@@ -319,12 +348,12 @@ async def run_cursor_tools_agent(
         ctx["agent_id"] = str(getattr(agent, "id", ""))
     ctx.setdefault("agent_slug", agent.slug)
 
-    # Drop tools that still lack required args (e.g. karkard without uploaded file path).
+    # Drop tools that still lack required args (e.g. script without uploaded file path).
     runnable: list[str] = []
     for name in selected:
         tool = ToolRegistry.get(name)
         args = build_tool_args(tool, name, ctx, user_input)
-        if name == "karkard_process" and not args.get("storage_path"):
+        if name == "run_agent_script" and not args.get("storage_path"):
             continue
         runnable.append(name)
     selected = runnable

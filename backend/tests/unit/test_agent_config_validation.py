@@ -16,8 +16,8 @@ from src.services.agent_service import AgentService
 
 
 def test_known_builtin_tool_is_accepted():
-    assert "karkard_process" in known_tool_slugs()
-    assert unknown_tool_slugs(["karkard_process", "run_agent_script"]) == []
+    assert "run_agent_script" in known_tool_slugs()
+    assert unknown_tool_slugs(["run_agent_script", "run_agent_script"]) == []
 
 
 def test_bogus_slug_is_flagged():
@@ -55,7 +55,7 @@ async def test_audit_agents_flags_bad_slug(monkeypatch):
 
     good = SimpleNamespace(
         id=uuid4(), slug="ok", name="OK", status="active",
-        tool_names=["karkard_process"], config_json={},
+        tool_names=["run_agent_script"], config_json={},
     )
     bad = SimpleNamespace(
         id=uuid4(), slug="bad", name="Bad", status="error",

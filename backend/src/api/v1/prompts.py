@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from src.agents_lib.agent_factory import _supports_temperature
 from src.api.dependencies import CurrentSuperuser
 from src.core import llm_runtime
+from src.core.chat_sanitize import sanitize_chat_output
 from src.schemas.prompt import (
     PromptImproveRequest,
     PromptImproveResponse,
@@ -50,13 +51,27 @@ _KIND_FA = {
 }
 
 
-def _build_llm() -> ChatOpenAI:
-    resolved = llm_runtime.resolve()
-    if not resolved.api_key:
-        raise HTTPException(status_code=503, detail="سرویس هوش مصنوعی پیکربندی نشده است.")
+def _build_llm(model_name: str | None = None) -> ChatOpenAI:
+    """Build ChatOpenAI from the active platform provider (gateway/cursor).
+
+    Keyless gateways still get a placeholder key — ChatOpenAI requires a non-empty
+    string even when the proxy ignores Authorization.
+    """
+    resolved = llm_runtime.resolve(model_name)
+    if not resolved.base_url and not resolved.api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="سرویس هوش مصنوعی پیکربندی نشده است. درگاه (OPENAI_BASE_URL) یا کلید API را تنظیم کنید.",
+        )
+    api_key = resolved.api_key or ("no-key-required" if resolved.base_url else None)
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="سرویس هوش مصنوعی پیکربندی نشده است. درگاه (OPENAI_BASE_URL) یا کلید API را تنظیم کنید.",
+        )
     kwargs: dict = {
         "model": resolved.model,
-        "api_key": resolved.api_key,
+        "api_key": api_key,
         "timeout": 600 if resolved.provider == "cursor" else 120,
         "max_retries": 1,
     }
@@ -93,7 +108,15 @@ async def list_templates(_admin: CurrentSuperuser):
 @router.post("/prompts/suggest", response_model=PromptSuggestResponse)
 async def suggest_prompt(payload: PromptSuggestRequest, _admin: CurrentSuperuser):
     """Generate a system prompt from agent wizard context using the configured LLM."""
-    llm = _build_llm()
+    try:
+        llm = _build_llm()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"راه‌اندازی سرویس هوش مصنوعی ناموفق بود: {type(exc).__name__}",
+        ) from exc
 
     dept = _DEPT_FA.get(payload.department or "", payload.department or "—")
     kind = _KIND_FA.get(payload.kind, payload.kind)
@@ -132,10 +155,16 @@ async def suggest_prompt(payload: PromptSuggestRequest, _admin: CurrentSuperuser
             + "\n\n".join(payload.instruction_files)[:48000]
         )
 
-    result = await llm.ainvoke(
-        [{"role": "system", "content": sys}, {"role": "user", "content": "\n".join(user_parts)}]
-    )
-    text = (getattr(result, "content", None) or str(result)).strip()
+    try:
+        result = await llm.ainvoke(
+            [{"role": "system", "content": sys}, {"role": "user", "content": "\n".join(user_parts)}]
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail=f"پاسخ از درگاه مدل دریافت نشد: {type(exc).__name__}: {str(exc)[:240]}",
+        ) from exc
+    text = sanitize_chat_output((getattr(result, "content", None) or str(result)).strip())
     if not text:
         raise HTTPException(status_code=502, detail="مدل پاسخی برنگرداند.")
     return PromptSuggestResponse(suggested_prompt=text)
@@ -144,7 +173,15 @@ async def suggest_prompt(payload: PromptSuggestRequest, _admin: CurrentSuperuser
 @router.post("/prompts/improve", response_model=PromptImproveResponse)
 async def improve_prompt(payload: PromptImproveRequest, _admin: CurrentSuperuser):
     """Improve an existing system prompt using the configured LLM."""
-    llm = _build_llm()
+    try:
+        llm = _build_llm()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"راه‌اندازی سرویس هوش مصنوعی ناموفق بود: {type(exc).__name__}",
+        ) from exc
     sys = (
         "You are an expert prompt engineer for enterprise AI agents. "
         "Rewrite the SYSTEM PROMPT to be professional, safe, and action-oriented. "
@@ -152,6 +189,18 @@ async def improve_prompt(payload: PromptImproveRequest, _admin: CurrentSuperuser
         "Output ONLY the improved prompt — no markdown or commentary."
     )
     user = f"LANG={payload.locale}\nTEMPLATE={payload.template or '-'}\n\nSYSTEM PROMPT:\n{payload.prompt}"
-    result = await llm.ainvoke([{"role": "system", "content": sys}, {"role": "user", "content": user}])
-    improved_text = getattr(result, "content", None) or str(result)
-    return PromptImproveResponse(improved_prompt=improved_text.strip())
+    try:
+        result = await llm.ainvoke(
+            [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail=f"پاسخ از درگاه مدل دریافت نشد: {type(exc).__name__}: {str(exc)[:240]}",
+        ) from exc
+    improved_text = sanitize_chat_output(
+        (getattr(result, "content", None) or str(result)).strip()
+    )
+    if not improved_text:
+        raise HTTPException(status_code=502, detail="مدل پاسخی برنگرداند.")
+    return PromptImproveResponse(improved_prompt=improved_text)

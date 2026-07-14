@@ -1,0 +1,56 @@
+{
+  "slug": "wizard.permissions-default",
+  "name": "Enable default permissions",
+  "name_fa": "فعال‌سازی دسترسی پیش‌فرض",
+  "description": "Recover a blocked create/publish flow when validation reports no user or missing default permissions by enabling org-default permissions.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["wizard_steps", "validation"],
+    "intent_regex": "حداقل یک کاربر|دسترسی پیش‌فرض|permissions|default.*permission|user.*required",
+    "min_autonomy_level": 2,
+    "priority": 80
+  },
+  "procedure": {
+    "label": "رفع مسدودی دسترسی پیش‌فرض",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.permissions_default",
+        "payload": { "enable_default": true },
+        "label": "زدن دسترسی پیش‌فرض سازمان"
+      }
+    ]
+  },
+  "content_md": "When validation fails with 'at least one user' or 'default permissions' errors, enable the org-default permissions checkbox (prefer the React setter) via the wizard.permissions_default bridge."
+}
+{
+  "slug": "wizard.permissions-default",
+  "name": "Enable default permissions",
+  "name_fa": "فعال‌سازی دسترسی پیش‌فرض",
+  "description": "Recover a blocked create/publish flow when validation reports no user or missing default permissions by enabling org-default permissions.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["wizard_steps", "validation"],
+    "intent_regex": "حداقل یک کاربر|دسترسی پیش‌فرض|permissions|default.*permission|user.*required",
+    "min_autonomy_level": 2,
+    "priority": 80
+  },
+  "procedure": {
+    "label": "رفع مسدودی دسترسی پیش‌فرض",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.permissions_default",
+        "payload": { "enable_default": true },
+        "label": "زدن دسترسی پیش‌فرض سازمان"
+      }
+    ]
+  },
+  "content_md": "When validation fails with 'at least one user' or 'default permissions' errors, enable the org-default permissions checkbox (prefer the React setter) via the wizard.permissions_default bridge."
+}

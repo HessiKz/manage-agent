@@ -1,0 +1,13 @@
+services:
+  backend:
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_data:/app/var
+      - ./backend/var/agent_files:/app/var/agent_files
+  frontend:
+    ports:
+      - "3000:3000"
+
+volumes:
+  backend_data:

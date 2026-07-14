@@ -60,8 +60,6 @@ def run_tool_slug(slug: str, variables: dict[str, Any] | None = None) -> dict[st
         if not agent_id:
             raise ValueError("agent_id is required for run_agent_script")
         return _run_pinned_agent_script(args)
-    if slug == "karkard_process" and agent_id:
-        args["agent_id"] = str(agent_id)
     schema = tool.args_schema.model_json_schema() if tool.args_schema else {}
     props = schema.get("properties", {})
     filtered = normalize_tool_args(tool, args)
@@ -78,15 +76,8 @@ def run_tool_slug(slug: str, variables: dict[str, Any] | None = None) -> dict[st
         elif first_key == "storage_path":
             path = args.get("storage_path") or ""
             if not path:
-                raise ValueError("فایل اکسل کارکرد آپلود نشده است.")
-            filtered = normalize_tool_args(
-                tool,
-                {
-                    "storage_path": path,
-                    "company_name": args.get("company_name"),
-                    "jalali_year": args.get("jalali_year"),
-                },
-            )
+                raise ValueError("فایل ورودی آپلود نشده است.")
+            filtered = normalize_tool_args(tool, {"storage_path": path})
 
     from src.core.agent_tool_files import run_with_file_pipeline
 

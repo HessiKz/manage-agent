@@ -61,9 +61,9 @@ def training_calibration_prefix(agent: Agent) -> str:
     if caps.get("file_upload_enabled"):
         parts.append("[تست فایل: به فایل‌های آپلودشده در workspace اشاره کن.]")
     tool_names = list(agent.tool_names or [])
-    if "karkard_process" in tool_names:
+    if "run_agent_script" in tool_names:
         parts.append(
-            "[کارکرد: برای پردازش اکسل حتماً ابزار karkard_process را فراخوانی کن؛ "
+            "[پردازش فایل: برای پردازش فایل آپلودشده حتماً ابزار run_agent_script را فراخوانی کن؛ "
             "محاسبه دستی در متن و ساخت لینک ساختگی ممنوع است.]"
         )
     if caps.get("actions_enabled") and not caps.get("chat_enabled"):

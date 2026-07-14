@@ -23,6 +23,14 @@ from src.models.notification import Notification
 from src.models.platform_setting import PlatformSetting
 from src.models.run_state import RunState, RunStatePhase, RunStateScope
 from src.models.user import User
+from src.models.platform_skill import PlatformSkill, SkillScope, SkillSource, SkillStatus
+from src.models.failure_ledger import FailureLedger, FailureRootCauseTag
+from src.models.execution_job import (
+    ExecutionBackend,
+    ExecutionJob,
+    ExecutionJobArtifact,
+    ExecutionJobStatus,
+)
 
 __all__ = [
     "User",
@@ -55,4 +63,14 @@ __all__ = [
     "RunState",
     "RunStateScope",
     "RunStatePhase",
+    "PlatformSkill",
+    "SkillScope",
+    "SkillSource",
+    "SkillStatus",
+    "FailureLedger",
+    "FailureRootCauseTag",
+    "ExecutionJob",
+    "ExecutionJobArtifact",
+    "ExecutionJobStatus",
+    "ExecutionBackend",
 ]

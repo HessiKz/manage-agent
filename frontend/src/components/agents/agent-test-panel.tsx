@@ -18,6 +18,7 @@ import {
   uploadAgentFile,
 } from "@/lib/api";
 import { displayAgentFileName, isRuntimeSampleFileName } from "@/lib/agent-file-roles";
+import { filePolicyForRole } from "@/lib/agent-presets";
 import {
   buildAgentTestPlan,
   buildSampleFile,
@@ -116,7 +117,7 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
           }
         }
         if (s.kind === "upload" && agent.file_policy) {
-          const policy = agent.file_policy;
+          const policy = filePolicyForRole(agent.file_policy, "input");
           const alreadyHas =
             runtimeFiles.length > 0 &&
             (!policyPrefersXlsx(policy) ||
@@ -360,4 +361,5 @@ export function AgentTestPanel({ agent, onChatExchange }: Props) {
       </CardBody>
     </Card>
   );
+
 }

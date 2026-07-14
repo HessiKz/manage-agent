@@ -226,47 +226,6 @@ def mirror_karkard_output_to_workspace(agent_id: UUID | str, processed: Path) ->
     return dest
 
 
-def ensure_karkard_processed_for_upload(agent_id: UUID | str, raw_path: Path) -> Path | None:
-    """Process raw کارکرد upload and mirror into agent workspace (always fresh output)."""
-    from src.core.agent_tool_files import (
-        finalize_tool_result,
-        prepare_tool_input_path,
-    )
-    from src.karkard.output import KARKARD_OUTPUT_DIR
-    from src.karkard.processor import process_karkard_workbook
-
-    if not raw_path.is_file():
-        return None
-
-    try:
-        work_input = prepare_tool_input_path(agent_id, raw_path, tool_slug="karkard_process")
-        out = process_karkard_workbook(
-            work_input,
-            work_input.parent,
-            company_name="شرکت توسعه کارآفرینی سوره",
-            jalali_year=1405,
-            agent_id=str(agent_id),
-        )
-        result = finalize_tool_result(
-            agent_id,
-            {"output_file": out.name, "input": str(work_input)},
-            tool_slug="karkard_process",
-            input_path=work_input,
-        )
-        out_name = result.get("output_file", out.name)
-        out = out.parent / out_name if (out.parent / out_name).is_file() else out
-    except Exception:
-        return None
-
-    KARKARD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    shared_copy = KARKARD_OUTPUT_DIR / out.name
-    if out.resolve() != shared_copy.resolve():
-        shutil.copy2(out, shared_copy)
-    from src.core.agent_workspace_files import mirror_karkard_output_to_workspace
-
-    return mirror_karkard_output_to_workspace(agent_id, out)
-
-
 def _encode_workspace_rel(rel: str) -> str:
     return encode_workspace_rel(rel)
 

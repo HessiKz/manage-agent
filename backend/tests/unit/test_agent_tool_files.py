@@ -43,7 +43,7 @@ def test_lock_tool_storage_path_rejects_sample(tmp_path: Path, monkeypatch):
 
 
 def test_resolve_agent_reference_ignores_bundled_without_sample():
-    assert resolve_agent_reference_path("any-agent", tool_slug="karkard_process") is None
+    assert resolve_agent_reference_path("any-agent", tool_slug="run_agent_script") is None
 
 
 def test_run_with_file_pipeline_invokes_without_storage_path():
@@ -70,5 +70,5 @@ def test_tool_accepts_storage_path_karkard():
     import src.agents_lib.custom_tools  # noqa: F401
     from src.agents_lib.tool_registry import ToolRegistry
 
-    assert tool_accepts_storage_path(ToolRegistry.get("karkard_process"))
+    assert tool_accepts_storage_path(ToolRegistry.get("run_agent_script"))
     assert not tool_accepts_storage_path(ToolRegistry.get("hr_lookup"))

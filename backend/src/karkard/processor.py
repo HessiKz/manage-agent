@@ -695,7 +695,7 @@ def process_karkard_workbook(
     ref_path = resolve_agent_reference_path(
         agent_id,
         reference_path,
-        tool_slug="karkard_process",
+        tool_slug="run_agent_script",
     )
 
     work_input = input_path

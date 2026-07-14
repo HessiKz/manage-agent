@@ -50,6 +50,44 @@ def _collapse_blank_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+# Gateway routing tags, e.g. "[MIX → se/pie/grok-4.5]" or "[router - provider/model]".
+# Arrow variants: →, ->, –, —, -
+_GATEWAY_ROUTE_TAG = re.compile(
+    r"\[\s*(?:MIX|mix|Mix|[A-Za-z][\w.\-/]*)\s*"
+    r"(?:→|->|–|—|-)\s*"
+    r"[^\]\n]{1,200}\s*\]"
+)
+
+
+def strip_gateway_route_tags(text: str, *, collapse: bool = True) -> str:
+    """Remove MIX/router tags anywhere (start of reply, mid-stream, after newlines).
+
+    Public so stream token handlers can reuse the same rule without full sanitize.
+    When ``collapse`` is False, only removes complete tags and preserves surrounding
+    whitespace (safe for per-token stream chunks).
+    """
+    cleaned = _GATEWAY_ROUTE_TAG.sub("", text or "")
+    # Hide incomplete trailing gateway tag while it is still streaming in.
+    open_at = cleaned.rfind("[")
+    if open_at >= 0 and "]" not in cleaned[open_at:]:
+        tail = cleaned[open_at:]
+        if re.match(
+            r"\[\s*(?:M(?:I(?:X)?)?|mix|Mix|[A-Za-z][\w.\-/]*)?"
+            r"(?:\s*(?:→|->|–|—|-)\s*[^\]\n]*)?$",
+            tail,
+        ):
+            cleaned = cleaned[:open_at]
+    if collapse:
+        cleaned = re.sub(r"(?m)^[ \t]+$", "", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        cleaned = cleaned.strip()
+    return cleaned
+
+
+# Back-compat private alias
+_strip_gateway_route_tags = strip_gateway_route_tags
+
+
 def _strip_reasoning_wrappers(text: str) -> str:
     text = _THINK_BLOCK.sub("", text)
     text = _THINK_XML.sub("", text)
@@ -144,6 +182,10 @@ def sanitize_chat_output(text: str) -> str:
         return text
 
     cleaned = text.strip()
+    # Keyless OpenAI-compatible gateways (e.g. workers.dev "MIX") may inject a
+    # routing tag like "[MIX → se/pie/grok-4.5]" — strip every occurrence so
+    # users never see gateway scaffolding.
+    cleaned = _strip_gateway_route_tags(cleaned)
     cleaned = _strip_reasoning_wrappers(cleaned)
 
     fenced = _extract_fenced_content(cleaned)

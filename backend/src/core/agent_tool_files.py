@@ -46,11 +46,8 @@ def lock_tool_storage_path(
     tool_slug: str | None = None,
     extensions: tuple[str, ...] = (".xlsx", ".xls", ".pdf", ".csv", ".docx"),
 ) -> Path:
-    """Resolve locked runtime upload; karkard keeps stricter raw-workbook rules."""
-    if tool_slug == "karkard_process":
-        from src.karkard.paths import resolve_locked_karkard_input
-
-        return resolve_locked_karkard_input(agent_id, storage_path_hint)
+    """Resolve locked runtime upload for script/tool execution."""
+    _ = tool_slug  # kept for call-site compatibility
     return resolve_locked_runtime_file(
         str(agent_id),
         storage_path_hint,
@@ -132,13 +129,8 @@ def finalize_tool_result(
         mirror_output_to_workspace,
     )
 
-    kind = "karkard" if tool_slug == "karkard_process" else "output"
-    if tool_slug == "karkard_process":
-        from src.core.agent_workspace_files import mirror_karkard_output_to_workspace
-
-        mirrored = mirror_karkard_output_to_workspace(agent_id, finalized)
-    else:
-        mirrored = mirror_output_to_workspace(agent_id, finalized, kind=kind)
+    kind = "output"
+    mirrored = mirror_output_to_workspace(agent_id, finalized, kind=kind)
 
     url = canonical_workspace_download_url(agent_id, mirrored)
     if url:

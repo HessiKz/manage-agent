@@ -16,6 +16,7 @@ import { FileIntakePanel } from "@/components/agents/file-intake-panel";
 import { FileInvokePanel } from "@/components/agents/file-invoke-panel";
 import { SupervisorGraph } from "@/components/agents/supervisor-graph";
 import { trainingAttachmentPolicy } from "@/lib/training-attachment-policy";
+import { filePolicyForRole } from "@/lib/agent-presets";
 import type { Agent } from "@/types";
 
 export type CapabilityPanelVariant = "full" | "run" | "chat";
@@ -87,16 +88,7 @@ export function CapabilityAwarePanel({
   };
   const filePolicy = trainingMode
     ? trainingAttachmentPolicy(agent)
-    : (agent.file_policy ?? {
-        min_files: 1,
-        max_files: 100,
-        max_file_size_mb: 25,
-        max_total_size_mb: 500,
-        allowed_mime_types: ["application/pdf"],
-        allowed_extensions: [".pdf"],
-        require_files_to_invoke: false,
-        auto_ingest_to_rag: true,
-      });
+    : filePolicyForRole(agent.file_policy, "input");
 
   const chatComposable = trainingMode || caps.chat_enabled;
   const showFileIntake = trainingMode || caps.file_upload_enabled;

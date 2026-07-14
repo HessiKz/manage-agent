@@ -6,6 +6,7 @@ import type {
   AgentPromptTemplate,
 } from "@/types";
 import { displayAgentFileName, isRuntimeSampleFileName } from "@/lib/agent-file-roles";
+import { filePolicyForRole } from "@/lib/agent-presets";
 
 export type AgentTestStepKind =
   | "upload"
@@ -135,10 +136,13 @@ export function exampleChatPrompt(
   if (agent.slug === "invoice") {
     return "فاکتورهای دسته A را از داده نمونه workspace صادر کن و لینک دانلود گزارش را بده.";
   }
-  if (agent.slug === "example-karkard" || agent.tool_names?.includes("karkard_process")) {
+  if (
+    agent.slug === "example-karkard" ||
+    agent.tool_names?.includes("run_agent_script")
+  ) {
     return (
       "فایل کارکرد از قبل در workspace است. اگر خروجی پردازش‌شده وجود دارد فقط لینک دانلود را بده؛ " +
-      "وگرنه `karkard_process` را با storage_path کامل از بخش فایل‌های آپلودشده (نه فقط نام فایل) فراخوانی کن."
+      "وگرنه `run_agent_script` را با storage_path کامل از بخش فایل‌های آپلودشده (نه فقط نام فایل) فراخوانی کن."
     );
   }
   if (caps.file_upload_enabled && !caps.chat_enabled && !caps.actions_enabled) {
@@ -248,7 +252,7 @@ export function buildAgentTestPlan(
     can_call_agents: false,
     supervisor_enabled: false,
   };
-  const policy = agent.file_policy;
+  const policy = filePolicyForRole(agent.file_policy, "input");
   const steps: AgentTestStepPlan[] = [];
   const runtimeFiles = existingFiles.filter((f) => isRuntimeSampleFileName(f.filename));
 

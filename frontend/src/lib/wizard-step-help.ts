@@ -1,4 +1,3 @@
-/** Persian copy for each step in the agent creation wizard. */
 
 export const WIZARD_STEP_HELP: Record<
   string,

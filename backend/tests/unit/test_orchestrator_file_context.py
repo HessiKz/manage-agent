@@ -85,7 +85,7 @@ async def test_uploaded_files_context_prefers_karkard_tool_instruction(tmp_path,
     )
     agent = SimpleNamespace(
         id=agent_id,
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
         config_json={},
         capabilities={},
     )
@@ -97,7 +97,7 @@ async def test_uploaded_files_context_prefers_karkard_tool_instruction(tmp_path,
 
     context = await service._uploaded_files_context(agent)
 
-    assert "karkard_process" in context
+    assert "run_agent_script" in context
     assert f"storage_path=\"{storage_path}\"" in context
     # ponytail: karkard never inlines xlsx — LLM must call the tool, not guess from truncated rows
     assert "=== محتوای فایل ورودی فعلی" not in context
@@ -212,7 +212,7 @@ async def test_karkard_never_uses_worker_auto_tool(tmp_path, monkeypatch):
         slug="example-karkard",
         name="کارکرد",
         kind=AgentKind.WORKER,
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
         config_json={"task_profile": "karkard"},
         capabilities={"chat_enabled": False},
         model_name="claude-opus-4-8",
@@ -265,7 +265,7 @@ async def test_chat_enabled_skips_karkard_auto_tool(tmp_path, monkeypatch):
         slug="example-karkard",
         name="کارکرد",
         kind=AgentKind.WORKER,
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
         config_json={"task_profile": "karkard"},
         capabilities={"chat_enabled": True},
     )

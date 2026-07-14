@@ -7,6 +7,7 @@ import {
   sampleVariablesForAction,
 } from "@/lib/agent-test-fixtures";
 import type { Agent, AgentAction } from "@/types";
+import { asIoFilePolicy } from "@/lib/agent-presets";
 
 const baseAgent: Agent = {
   id: "1",
@@ -82,7 +83,7 @@ describe("buildAgentTestPlan", () => {
         slug: "process_karkard",
         label: "محاسبه",
         prompt_template: "",
-        tool_chain: ["karkard_process"],
+        tool_chain: ["run_agent_script"],
         input_schema: {
           jalali_year: { type: "integer", default: 1405 },
         },
@@ -111,7 +112,7 @@ describe("sampleVariablesForAction", () => {
       slug: "process_karkard",
       label: "محاسبه",
       prompt_template: "",
-      tool_chain: ["karkard_process"],
+      tool_chain: ["run_agent_script"],
       confirmation_required: false,
       input_schema: {
         jalali_year: { title: "سال شمسی", type: "integer", default: 1405 },
@@ -152,7 +153,7 @@ describe("buildWidgetAdminTestPrompt", () => {
 describe("buildSampleFile", () => {
   it("prefers csv when policy allows csv", () => {
     const f = buildSampleFile({
-      ...baseAgent.file_policy,
+      ...asIoFilePolicy(baseAgent.file_policy).input,
       allowed_mime_types: ["text/csv"],
       allowed_extensions: [".csv"],
     });

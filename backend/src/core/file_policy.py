@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -22,6 +23,39 @@ def _normalize_policy(raw: dict | None) -> AgentFilePolicy:
     if not raw:
         return AgentFilePolicy()
     return AgentFilePolicy.model_validate(raw)
+
+
+FileRole = Literal["input", "output"]
+
+
+def _classify_role(filename: str) -> FileRole:
+    from src.core.agent_file_roles import is_output_sample_file
+    return "output" if is_output_sample_file(filename) else "input"
+
+
+def resolve_io_policies(agent: Agent) -> tuple[AgentFilePolicy, AgentFilePolicy]:
+    """Return (input_policy, output_policy) for an agent.
+
+    New shape: file_policy = {"input": {...}, "output": {...}}.
+    Legacy flat shape: interpreted as the input policy; output falls back
+    to the default AgentFilePolicy (backward-compat for pre-split agents).
+    """
+    raw = agent.file_policy or {}
+    if isinstance(raw, dict):
+        if isinstance(raw.get("input"), dict) or isinstance(raw.get("output"), dict):
+            inp = _normalize_policy(raw.get("input"))
+            out = _normalize_policy(raw.get("output")) if isinstance(raw.get("output"), dict) else AgentFilePolicy()
+            return inp, out
+        if raw:
+            return _normalize_policy(raw), AgentFilePolicy()
+    return AgentFilePolicy(), AgentFilePolicy()
+
+
+def _policy_for_upload(agent: Agent, filename: str) -> AgentFilePolicy:
+    caps = agent.capabilities or {}
+    if agent_in_interactive_training(agent) and not caps.get("file_upload_enabled", False):
+        return TRAINING_ATTACHMENT_POLICY
+    return resolve_io_policies(agent)[0 if _classify_role(filename) == "input" else 1]
 
 
 def _extension(filename: str) -> str:
@@ -54,10 +88,7 @@ async def validate_upload(
             detail="File upload is disabled for this agent",
         )
 
-    if caps.get("file_upload_enabled", False):
-        policy = _normalize_policy(agent.file_policy)
-    else:
-        policy = TRAINING_ATTACHMENT_POLICY
+    policy = _policy_for_upload(agent, filename)
     ext = _extension(filename)
     if not policy.allow_all_types:
         mime_ok = mime_type in policy.allowed_mime_types

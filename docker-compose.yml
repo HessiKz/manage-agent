@@ -48,6 +48,7 @@ services:
       PYTHONPATH: /app
       APP_ENV: development
       CORS_ORIGINS: http://45.138.135.253,http://45.138.135.253:3000
+      MA_SCRIPT_WRITER: caveman
     volumes:
       - ./backend:/app
     ports:
@@ -81,6 +82,32 @@ services:
     depends_on:
       - backend
     command: sh scripts/docker-dev-entry.sh
+
+  sandbox-worker:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.worker
+    container_name: ma-sandbox-worker
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin}@postgres:5432/${POSTGRES_DB:-manage_agent}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      SANDBOX_IMAGE: manage-agent-sandbox:latest
+      SANDBOX_WORKER_ENABLED: ${SANDBOX_WORKER:-0}
+      SANDBOX_DOCKER_HOST: unix:///var/run/docker.sock
+      AGENT_FILES_ROOT: /var/agent_files
+    volumes:
+      - ./backend:/app/backend
+      - ./var/agent_files:/var/agent_files
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: /app/backend/venv/bin/python /app/backend/scripts/sandbox_worker.py
+    profiles: ["sandbox"]
 
   nginx:
     image: nginx:alpine

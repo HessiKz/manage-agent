@@ -1,4 +1,5 @@
 import type { Agent, AgentFilePolicy } from "@/types";
+import { asIoFilePolicy } from "@/lib/agent-presets";
 
 /** Relaxed upload policy during interactive training (backend mirrors this). */
 export const TRAINING_ATTACHMENT_POLICY: AgentFilePolicy = {
@@ -21,7 +22,7 @@ export const TRAINING_ATTACHMENT_POLICY: AgentFilePolicy = {
 
 export function trainingAttachmentPolicy(agent: Agent): AgentFilePolicy {
   if (agent.capabilities?.file_upload_enabled && agent.file_policy) {
-    return agent.file_policy;
+    return asIoFilePolicy(agent.file_policy).input;
   }
   return TRAINING_ATTACHMENT_POLICY;
 }

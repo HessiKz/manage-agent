@@ -156,12 +156,14 @@ export async function persistAgentEditor(
 ): Promise<Agent> {
   const preparedActions = prepareActionsForPublish(draft.actions);
   const toolNames = deriveAgentToolNames(preparedActions);
-  const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishFileConfig(
+  const { capabilities: publishCaps, filePolicy: publishIoPolicy } = resolvePublishFileConfig(
     draft.capabilities,
+    draft.filePolicy,
     draft.filePolicy,
     draft.stagedFiles.length,
     toolNames
   );
+  const publishFilePolicy = publishIoPolicy.input;
   const caps = clampCapabilitiesForKind(draft.kind, publishCaps);
 
   const publishFilePolicyError = validateFilePolicy(publishFilePolicy);
@@ -180,7 +182,7 @@ export async function persistAgentEditor(
     department: draft.department,
     kind: draft.kind,
     capabilities: caps,
-    file_policy: publishFilePolicy,
+    file_policy: publishIoPolicy,
     agent_link_policy: draft.linkPolicy,
     system_prompt: draft.systemPrompt.trim() || undefined,
     model_name: draft.modelName,

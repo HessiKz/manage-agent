@@ -22,7 +22,7 @@ type Props = {
 /** Slugs shown in the agent creation wizard (hide obscure/internal tools). */
 export const WIZARD_TOOL_SLUGS = new Set([
   "hr_lookup",
-  "karkard_process",
+  "run_agent_script",
   "report_generate",
   "resume_screen",
 ]);

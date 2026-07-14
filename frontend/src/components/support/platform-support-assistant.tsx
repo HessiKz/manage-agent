@@ -109,6 +109,7 @@ import {
   updateUserPreferences,
 } from "@/lib/api";
 import { useFeatureFlag } from "@/lib/feature-flags";
+import { matchAndRunSkill } from "@/lib/skill-runner";
 import { cn } from "@/lib/utils";
 import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 import {
@@ -695,7 +696,33 @@ export function PlatformSupportAssistant() {
         const autoFixed = await tryAutoResolveSupportError(errMsg, null);
         if (autoFixed) {
           try {
-            await playWithRecovery(script);
+            // playWithRecovery is defined in the try-block only; re-run via playScript here.
+            const replay = async (target: SupportUiScript) => {
+              await playScript(target, {
+                onProgress: (p: SupportPlayProgress) => {
+                  setUiProgress(p);
+                  const line = missionStatusLine(p.step, p.total, p.label);
+                  setMessages((m) => {
+                    const copy = [...m];
+                    const last = copy[copy.length - 1];
+                    if (last?.role === "assistant") {
+                      copy[copy.length - 1] = {
+                        ...last,
+                        content: `${base}\n\n${line}`,
+                        uiTask: {
+                          label: p.scriptLabel || target.label,
+                          step: p.step,
+                          total: p.total,
+                          status: p.label,
+                        },
+                      };
+                    }
+                    return copy;
+                  });
+                },
+              });
+            };
+            await replay(script);
             let finalScript = script;
             const livePath = window.location.pathname;
             if (
@@ -707,7 +734,7 @@ export function PlatformSupportAssistant() {
                 const healScript = buildWizardContinueTestingScript(
                   buildContinueTestingPayload(slug)
                 );
-                await playWithRecovery(healScript);
+                await replay(healScript);
                 finalScript = healScript;
               }
             } else if (
@@ -718,7 +745,7 @@ export function PlatformSupportAssistant() {
                 readWizardFormSnapshot() ?? readStoredWizardCreatePayload();
               if (snapshot?.name) {
                 const healScript = buildWizardCreateBridgeScript(snapshot);
-                await playWithRecovery(healScript);
+                await replay(healScript);
                 finalScript = healScript;
               }
             }
@@ -891,6 +918,50 @@ export function PlatformSupportAssistant() {
       }
 
       await refreshRunState();
+
+      // Phase 2 M1: try a stored skill before the LLM loop.
+      // Gated by SKILL_LIBRARY_V1 on the backend; runs only when
+      // confidence >= 0.75 and effective autonomy >= L2. SKILL_LIBRARY_V1 off
+      // (or no match) falls back to the LLM path below.
+      if (graduatedAutonomyEnabled && effectiveAutonomy() >= 2) {
+        const state = runStateRef.current;
+        const skillRes = await matchAndRunSkill({
+          runState: (state ?? {}) as Record<string, unknown>,
+          message: text,
+          pathname: livePath,
+          autonomyLevel: effectiveAutonomy(),
+          playScript: (script, opts) =>
+            playScript(script, {
+              onProgress: (p) => {
+                setUiProgress(p);
+                const line = missionStatusLine(p.step, p.total, p.label);
+                setMessages((m) => {
+                  const copy = [...m];
+                  const last = copy[copy.length - 1];
+                  if (last?.role === "assistant") {
+                    copy[copy.length - 1] = {
+                      ...last,
+                      content: `${last.content ? last.content + "\n\n" : ""}${line}`,
+                      uiTask: {
+                        label: p.scriptLabel || script.label,
+                        step: p.step,
+                        total: p.total,
+                        status: p.label,
+                      },
+                    };
+                  }
+                  return copy;
+                });
+              },
+            }),
+        });
+        if (skillRes === "ran") {
+          setLoading(false);
+          llmLoading.complete();
+          return;
+        }
+      }
+
       const runBlock = formatRunStateBlock(runStateRef.current);
       let payload = buildSupportUserMessage(pathname, text, isAdmin, captureUiSnapshot());
       if (runBlock) payload = `${payload}\n\n${runBlock}`;

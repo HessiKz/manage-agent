@@ -140,14 +140,12 @@ DOMAIN_TOOL_SLUGS = [
     "report_generate",
     "resume_screen",
     "crm_lookup",
-    "karkard_process",
     "run_agent_script",
 ]
 
-# Built-in tools that natively process an uploaded file and should win as an
-# agent's primary_tool over LLM script synthesis. Add a new built-in file tool
-# here once and runtime planning picks it up — no per-tool heuristic code.
-BUILTIN_FILE_TOOLS = frozenset({"karkard_process"})
+# Built-in tools that natively process an uploaded file without a workspace
+# script. Empty: all file processing goes through run_agent_script + synthesis.
+BUILTIN_FILE_TOOLS = frozenset()
 
 
 def is_support_agent_slug(slug: str | None) -> bool:

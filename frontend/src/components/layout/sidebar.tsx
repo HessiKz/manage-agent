@@ -13,6 +13,8 @@ import {
   Shield,
   Users,
   Wrench,
+  Sparkles,
+  AlertTriangle,
 } from "lucide-react";
 import { cn, deptLabel } from "@/lib/utils";
 import type { DepartmentCount } from "@/types";
@@ -21,6 +23,7 @@ import type { ViewMode } from "@/stores/ui-store";
 import { useAuthStore } from "@/stores/auth-store";
 import type { ViewModeDirection } from "@/hooks/use-view-mode-switch";
 import { SharedLogo } from "@/components/motion/shared";
+import { useFeatureFlag } from "@/lib/feature-flags";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import {
   getViewModeNavVariants,
@@ -34,6 +37,8 @@ type WorkspaceNavItem = {
   icon: React.ComponentType<{ className?: string }>;
   admin?: boolean;
   countKey?: keyof SidebarCounts;
+  /** When set, the item only renders if the given feature flag is enabled. */
+  flag?: "skill_library_v1" | "failure_ledger_v1" | "sandbox_execution_enabled";
 };
 
 const WORKSPACE_NAV = [
@@ -46,6 +51,27 @@ const WORKSPACE_NAV = [
 const ADMIN_NAV = [
   { href: "/admin", label: "نمای کلی", icon: ShieldCheck, admin: true },
   { href: "/admin/agents", label: "مدیریت ایجنت‌ها", icon: Bot, admin: true },
+  {
+    href: "/admin/skills",
+    label: "مهارت‌ها",
+    icon: Sparkles,
+    admin: true,
+    flag: "skill_library_v1",
+  },
+  {
+    href: "/admin/failures",
+    label: "دفترچه خطاها",
+    icon: AlertTriangle,
+    admin: true,
+    flag: "failure_ledger_v1",
+  },
+  {
+    href: "/admin/sandbox",
+    label: "پایش جعبه‌ای",
+    icon: ShieldCheck,
+    admin: true,
+    flag: "sandbox_execution_enabled",
+  },
   { href: "/agents/create", label: "ایجاد ایجنت جدید", icon: Wrench, admin: true },
   { href: "/admin/knowledge", label: "پایگاه دانش", icon: Database, admin: true },
   { href: "/users", label: "کاربران و دسترسی‌ها", icon: Users, admin: true },
@@ -80,6 +106,9 @@ export function Sidebar({
   const user = useAuthStore((s) => s.user);
   const reduced = useReducedMotion();
   const navVariants = getViewModeNavVariants(!!reduced, switchDirection);
+  const skillLibFlag = useFeatureFlag("skill_library_v1");
+  const failureLedgerFlag = useFeatureFlag("failure_ledger_v1");
+  const sandboxFlag = useFeatureFlag("sandbox_execution_enabled");
 
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -89,7 +118,13 @@ export function Sidebar({
 
   const navItems =
     viewMode === "admin"
-      ? (ADMIN_NAV.filter((n) => !n.admin || isSuperuser) as WorkspaceNavItem[])
+      ? (ADMIN_NAV.filter((n) => {
+          if (!n.admin || !isSuperuser) return false;
+          if (n.flag === "skill_library_v1") return skillLibFlag;
+          if (n.flag === "failure_ledger_v1") return failureLedgerFlag;
+          if (n.flag === "sandbox_execution_enabled") return sandboxFlag;
+          return true;
+        }) as WorkspaceNavItem[])
       : WORKSPACE_NAV;
 
   const shellMotion = shellReveal || loggingOut;

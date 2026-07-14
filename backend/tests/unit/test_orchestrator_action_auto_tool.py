@@ -35,12 +35,12 @@ async def test_action_slug_resolves_karkard_tool_for_llm_path():
         slug="example-karkard",
         name="کارکرد",
         kind=AgentKind.WORKER,
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
         config_json={"task_profile": "karkard"},
     )
     action = SimpleNamespace(
         slug="process_karkard",
-        tool_chain=["karkard_process"],
+        tool_chain=["run_agent_script"],
     )
 
     class _Db:
@@ -52,7 +52,7 @@ async def test_action_slug_resolves_karkard_tool_for_llm_path():
         agent,
         AgentInvokeRequest(input="run", stream=False, action_slug="process_karkard"),
     )
-    assert tool_slug == "karkard_process"
+    assert tool_slug == "run_agent_script"
 
 
 @pytest.mark.asyncio
@@ -61,11 +61,11 @@ async def test_karkard_action_not_direct_tool_bypass():
         id=uuid4(),
         slug="example-karkard",
         name="کارکرد",
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
     )
     action = SimpleNamespace(
         slug="process_karkard",
-        tool_chain=["karkard_process"],
+        tool_chain=["run_agent_script"],
         prompt_template="پردازش کن",
     )
     service = AgentActionService(SimpleNamespace())

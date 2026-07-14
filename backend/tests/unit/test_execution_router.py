@@ -77,14 +77,14 @@ def test_deterministic_worker_action_script_route_is_auto_tool():
     assert resolve_execution_path(agent, _req(action_slug="run")) == ExecutionPath.AUTO_TOOL
 
 
-def test_deterministic_worker_action_karkard_is_react_not_bypass():
+def test_deterministic_worker_action_script_is_auto_tool():
     agent = _agent(
         kind=AgentKind.WORKER,
         caps={"chat_enabled": False},
-        config_json={"runtime_plan": {"primary_tool": "karkard_process"}},
-        tool_names=["karkard_process"],
+        config_json={"runtime_plan": {"primary_tool": "run_agent_script"}},
+        tool_names=["run_agent_script"],
     )
-    assert resolve_execution_path(agent, _req(action_slug="process")) == ExecutionPath.REACT
+    assert resolve_execution_path(agent, _req(action_slug="process")) == ExecutionPath.AUTO_TOOL
 
 
 def test_deterministic_no_action_primary_script_is_auto_tool():

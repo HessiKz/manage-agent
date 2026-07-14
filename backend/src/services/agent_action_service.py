@@ -159,8 +159,6 @@ class AgentActionService:
                 lock_tool_storage_path(agent_id, hint, tool_slug=tool_slug)
             )
         except FileNotFoundError:
-            if tool_slug == "karkard_process":
-                raise
             if "storage_path" not in (variables or {}):
                 latest = await self._latest_runtime_xlsx(agent_id)
                 if latest:

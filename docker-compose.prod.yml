@@ -27,10 +27,11 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CORS_ORIGINS: ${PUBLIC_URL}
       LOG_JSON: "true"
-    # Drop dev bind-mount; only persist runtime data
-    volumes: !reset
+    # Persist runtime data (agent files, logs, demo reports)
+    volumes:
       - backend_data:/app/var
-    ports: !reset []
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -56,13 +57,14 @@ services:
     # Drop dev bind-mount, host user, and npm run dev
     user: !reset
     env_file: !reset []
-    volumes: !reset []
+    volumes: []
     command: !reset
     environment:
       NODE_ENV: production
       INTERNAL_API_URL: http://backend:8000
       NEXT_PUBLIC_API_URL: ""
-    ports: !reset []
+    ports:
+      - "3000:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -105,3 +107,4 @@ services:
 
 volumes:
   backend_data:
+

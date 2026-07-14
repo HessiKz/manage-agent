@@ -69,13 +69,13 @@ def main() -> int:
                     "require_files_to_invoke": False,
                     "auto_ingest_to_rag": False,
                 },
-                "tool_names": ["karkard_process"],
+                "tool_names": ["run_agent_script"],
                 "actions": [
                     {
                         "slug": "process_karkard",
                         "label": "محاسبه کارکرد",
                         "prompt_template": "فایل کارکرد خام را پردازش کن.",
-                        "tool_chain": ["karkard_process"],
+                        "tool_chain": ["run_agent_script"],
                         "input_schema": {},
                     }
                 ],

@@ -177,20 +177,66 @@ async def submit_validation_answers(
     user: CurrentUser,
     background_tasks: BackgroundTasks,
 ):
-    """Submit clarifying answers from the planning phase and resume validation."""
+    """Submit planning answers; hand off to interactive training (no auto-validation yet)."""
     agent = await AgentService(db).submit_validation_answers(agent_id, payload.answers)
-    background_tasks.add_task(run_agent_validation, agent_id, user.id)
+    # Ensure training session is active after answers.
+    try:
+        agent = await AgentTrainingService(db).start_training(agent_id)
+    except Exception:  # noqa: BLE001
+        agent = await AgentService(db).get(agent_id)
     validation = (agent.config_json or {}).get("validation") or {}
     return {
         "agent_id": str(agent.id),
         "status": validation.get("state", agent.status.value),
-        "scheduled": True,
+        "scheduled": False,
+        "next": "training",
     }
+
+
+@router.post("/{agent_id}/planning/preflight", response_model=AgentDetailRead)
+async def planning_preflight(
+    agent_id: UUID,
+    db: DB,
+    user: CurrentUser,
+    background_tasks: BackgroundTasks,
+):
+    """Run planning Q&A before interactive training (questions first).
+
+    Returns immediately and schedules planning in the background so the
+    single uvicorn worker is not blocked for minutes (which would stall
+    every other API call and trigger client timeouts).
+    """
+    from src.services.agent_validation_runner import run_planning_preflight_runner
+
+    agent = await AgentService(db).get(agent_id)
+    # If planning already completed or questions are pending, do not re-run.
+    validation = (agent.config_json or {}).get("validation") or {}
+    planning = validation.get("planning") or {}
+    already_planned = bool(planning.get("analysis")) and not planning.get(
+        "awaiting_answers"
+    )
+    if not already_planned:
+        # Mark pending so frontend shows "در حال تحلیل…" immediately.
+        cfg = dict(agent.config_json or {})
+        v = dict(cfg.get("validation") or {})
+        v["state"] = "planning"
+        v["current_phase"] = "planning"
+        v["current_detail"] = "در حال تحلیل و سؤالات قبل از تست تعاملی…"
+        p = dict(v.get("planning") or {})
+        p["awaiting_answers"] = False
+        v["planning"] = p
+        cfg["validation"] = v
+        agent.config_json = cfg
+        flag_modified(agent, "config_json")
+        await db.commit()
+        await db.refresh(agent)
+        background_tasks.add_task(run_planning_preflight_runner, agent_id, user.id)
+    return AgentDetailRead.model_validate(agent)
 
 
 @router.post("/{agent_id}/training/start", response_model=AgentDetailRead)
 async def start_agent_training(agent_id: UUID, db: DB, _user: CurrentUser):
-    """Begin interactive admin training before automated validation."""
+    """Begin interactive admin training after planning answers (if any)."""
     agent = await AgentTrainingService(db).start_training(agent_id)
     return AgentDetailRead.model_validate(agent)
 

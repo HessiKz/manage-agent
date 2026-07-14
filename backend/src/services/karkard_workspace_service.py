@@ -1,15 +1,8 @@
-"""Ensure catalog کارکرد agents have processable demo output on disk."""
+"""Karkard demo fixture helpers (no auto-process; scripts own processing)."""
 
 from __future__ import annotations
 
 from pathlib import Path
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.core.agent_workspace_files import ensure_karkard_processed_for_upload
-from src.models.agent import Agent
-from src.models.agent_file import AgentFile
 
 
 def _karkard_fixture_paths() -> list[Path]:
@@ -27,41 +20,3 @@ def resolve_karkard_fixture() -> Path | None:
         if path.is_file():
             return path
     return None
-
-
-async def ensure_catalog_karkard_outputs(db: AsyncSession) -> int:
-    """Pre-process demo کارکرد file for example-karkard when raw exists but output missing."""
-    agent = (
-        await db.execute(select(Agent).where(Agent.slug == "example-karkard").limit(1))
-    ).scalar_one_or_none()
-    if not agent:
-        return 0
-
-    rows = (
-        await db.execute(
-            select(AgentFile)
-            .where(AgentFile.agent_id == agent.id)
-            .order_by(AgentFile.created_at.desc())
-        )
-    ).scalars().all()
-
-    raw_path: Path | None = None
-    for row in rows:
-        candidate = Path(row.storage_path)
-        if candidate.is_file() and candidate.suffix.lower() in {".xlsx", ".xls"}:
-            raw_path = candidate
-            break
-
-    if not raw_path:
-        fixture = resolve_karkard_fixture()
-        if not fixture:
-            return 0
-        dest_dir = Path("var/agent_files") / str(agent.id)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "demo-karkard-raw.xlsx"
-        if not dest.is_file():
-            dest.write_bytes(fixture.read_bytes())
-        raw_path = dest
-
-    processed = ensure_karkard_processed_for_upload(agent.id, raw_path)
-    return 1 if processed else 0

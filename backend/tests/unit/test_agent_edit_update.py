@@ -40,7 +40,7 @@ def test_agent_detail_read_coerces_decimal_temperature():
             self.icon = None
             self.input_schema = {"properties": {}}
             self.prompt_template = "run"
-            self.tool_chain = ["karkard_process"]
+            self.tool_chain = ["run_agent_script"]
             self.confirmation_required = False
             self.order_index = 0
             self.created_at = datetime.now(timezone.utc)
@@ -79,7 +79,7 @@ def test_agent_detail_read_coerces_decimal_temperature():
         temperature = Decimal("0.20")
         max_iterations = 20
         system_prompt = "prompt"
-        tool_names = ["karkard_process"]
+        tool_names = ["run_agent_script"]
         memory_type = "buffer"
         memory_config = {}
         cost_limit_monthly = None

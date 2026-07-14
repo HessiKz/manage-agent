@@ -47,6 +47,7 @@ dependencies = [
     "xlrd>=2.0.1",
     "python-docx>=1.1.0",
     "jdatetime>=5.0.0",
+    "timeir>=0.0.3",
     "fpdf2>=2.8.0",
     "arabic-reshaper>=3.0.0",
     "python-bidi>=0.4.2",

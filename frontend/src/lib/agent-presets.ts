@@ -1,4 +1,4 @@
-import type { AgentCapabilities, AgentFilePolicy, AgentKind, ExecutionPrecision } from "@/types";
+import type { AgentCapabilities, AgentFilePolicy, AgentKind, ExecutionPrecision, IoFilePolicy } from "@/types";
 
 /** Only four agent types — everything else is a capability toggle. */
 export const AGENT_KINDS: AgentKind[] = ["chat", "worker", "supervisor", "custom"];
@@ -175,7 +175,7 @@ export function filePolicyForCapabilities(
   toolNames: string[] = [],
 ): Partial<AgentFilePolicy> | undefined {
   if (!caps.file_upload_enabled) return undefined;
-  if (toolNames.includes("karkard_process")) return FILE_POLICY_SPREADSHEET;
+  if (toolNames.includes("run_agent_script")) return FILE_POLICY_SPREADSHEET;
   if (!caps.chat_enabled && !caps.actions_enabled) return FILE_POLICY_BULK_INTAKE;
   return undefined;
 }
@@ -190,6 +190,73 @@ export const DEFAULT_FILE_POLICY: AgentFilePolicy = {
   require_files_to_invoke: false,
   auto_ingest_to_rag: true,
 };
+
+export const FILE_POLICY_LOOSE: AgentFilePolicy = {
+  min_files: 0,
+  max_files: 20,
+  max_file_size_mb: 50,
+  max_total_size_mb: 500,
+  allowed_mime_types: [],
+  allowed_extensions: [],
+  require_files_to_invoke: false,
+  auto_ingest_to_rag: true,
+  allow_all_types: true,
+};
+
+export const FILE_POLICY_DOCS_OUTPUT: AgentFilePolicy = {
+  min_files: 0,
+  max_files: 20,
+  max_file_size_mb: 50,
+  max_total_size_mb: 500,
+  allowed_mime_types: [
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
+  ],
+  allowed_extensions: [".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".csv"],
+  require_files_to_invoke: false,
+  auto_ingest_to_rag: false,
+  allow_all_types: false,
+};
+
+export const FILE_POLICY_PRESETS_PER_KIND: Record<AgentKind, IoFilePolicy> = {
+  chat: { input: FILE_POLICY_LOOSE, output: FILE_POLICY_DOCS_OUTPUT },
+  worker: { input: FILE_POLICY_BULK_INTAKE, output: FILE_POLICY_DOCS_OUTPUT },
+  supervisor: { input: DEFAULT_FILE_POLICY, output: DEFAULT_FILE_POLICY },
+  custom: { input: DEFAULT_FILE_POLICY, output: DEFAULT_FILE_POLICY },
+};
+
+export const DEFAULT_IO_POLICY: IoFilePolicy = { input: DEFAULT_FILE_POLICY, output: DEFAULT_FILE_POLICY };
+
+/** Per-kind I/O file policy, mirroring backend file_policy_for_kind. */
+export function filePolicyForKind(kind: AgentKind): IoFilePolicy {
+  return FILE_POLICY_PRESETS_PER_KIND[canonicalAgentKind(kind)] ?? FILE_POLICY_PRESETS_PER_KIND.custom;
+}
+
+/** Read a single role's policy from either shape (IoFilePolicy or legacy flat). */
+export function filePolicyForRole(
+  policy: IoFilePolicy | AgentFilePolicy | undefined,
+  role: "input" | "output",
+): AgentFilePolicy {
+  if (!policy) return role === "output" ? DEFAULT_FILE_POLICY : DEFAULT_FILE_POLICY;
+  if ("input" in policy && "output" in policy) {
+    return policy[role];
+  }
+  return policy as AgentFilePolicy;
+}
+
+/** Coerce any payload file_policy into the IoFilePolicy container shape. */
+export function asIoFilePolicy(policy: IoFilePolicy | AgentFilePolicy | undefined): IoFilePolicy {
+  if (!policy) return { input: DEFAULT_FILE_POLICY, output: DEFAULT_FILE_POLICY };
+  if ("input" in policy && "output" in policy) {
+    return policy as IoFilePolicy;
+  }
+  return { input: policy as AgentFilePolicy, output: DEFAULT_FILE_POLICY };
+}
 
 export const MIME_CHIPS = [
   { mime: "application/pdf", ext: ".pdf", label: "PDF" },
@@ -215,12 +282,16 @@ export const MIME_CHIPS = [
 /** Merge instruction attachments policy when admin stages reference files. */
 export function resolvePublishFileConfig(
   capabilities: AgentCapabilities,
-  filePolicy: AgentFilePolicy,
+  inputFilePolicy: AgentFilePolicy,
+  outputFilePolicy: AgentFilePolicy,
   stagedFileCount: number,
   toolNames: string[] = []
-): { capabilities: AgentCapabilities; filePolicy: AgentFilePolicy } {
+): { capabilities: AgentCapabilities; filePolicy: IoFilePolicy } {
   if (stagedFileCount === 0 && !capabilities.file_upload_enabled) {
-    return { capabilities, filePolicy };
+    return {
+      capabilities,
+      filePolicy: { input: inputFilePolicy, output: outputFilePolicy },
+    };
   }
   const caps =
     stagedFileCount > 0 && !capabilities.file_upload_enabled
@@ -230,18 +301,30 @@ export function resolvePublishFileConfig(
     return {
       capabilities: caps,
       filePolicy: {
-        ...filePolicy,
-        ...FILE_POLICY_INSTRUCTION_ATTACHMENTS,
-        min_files: filePolicy.min_files,
-        require_files_to_invoke: filePolicy.require_files_to_invoke,
-        auto_ingest_to_rag: filePolicy.auto_ingest_to_rag ?? true,
+        input: {
+          ...inputFilePolicy,
+          ...FILE_POLICY_INSTRUCTION_ATTACHMENTS,
+          min_files: inputFilePolicy.min_files,
+          require_files_to_invoke: inputFilePolicy.require_files_to_invoke,
+          auto_ingest_to_rag: inputFilePolicy.auto_ingest_to_rag ?? true,
+        },
+        output: {
+          ...outputFilePolicy,
+          ...FILE_POLICY_INSTRUCTION_ATTACHMENTS,
+          min_files: outputFilePolicy.min_files,
+          require_files_to_invoke: outputFilePolicy.require_files_to_invoke,
+          auto_ingest_to_rag: outputFilePolicy.auto_ingest_to_rag ?? true,
+        },
       },
     };
   }
   const fpPreset = filePolicyForCapabilities(caps, toolNames);
   return {
     capabilities: caps,
-    filePolicy: fpPreset ? { ...DEFAULT_FILE_POLICY, ...fpPreset } : filePolicy,
+    filePolicy: {
+      input: fpPreset ? { ...DEFAULT_FILE_POLICY, ...fpPreset } : inputFilePolicy,
+      output: outputFilePolicy,
+    },
   };
 }
 

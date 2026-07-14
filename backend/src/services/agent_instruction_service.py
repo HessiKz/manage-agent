@@ -336,11 +336,22 @@ class AgentInstructionService:
         if not force and meta.get("fingerprint") == fp:
             return agent
 
-        rules, rule_status = await self.extract_rules(agent, normalized_text, blocks)
-        prompt, prompt_status = await self.build_prompt_text(agent, normalized_text, blocks, rules)
-        status = "ready" if prompt_status == "ready" and rules else prompt_status
-        if rules and prompt_status == "fallback":
-            status = "fallback"
+        # Fast path: text-only instruction with no files — skip LLM extract/rewrite
+        # so wizard bootstrap is not blocked for 30–90s on a model round-trip.
+        if not blocks and normalized_text:
+            rules = _heuristic_rules_from_text(normalized_text, source="admin_text")
+            rule_status = "heuristic"
+            prompt = normalized_text
+            prompt_status = "ready"
+            status = "ready"
+        else:
+            rules, rule_status = await self.extract_rules(agent, normalized_text, blocks)
+            prompt, prompt_status = await self.build_prompt_text(
+                agent, normalized_text, blocks, rules
+            )
+            status = "ready" if prompt_status == "ready" and rules else prompt_status
+            if rules and prompt_status == "fallback":
+                status = "fallback"
 
         agent.system_prompt = prompt
         cfg["instruction_rules"] = rules
@@ -353,6 +364,14 @@ class AgentInstructionService:
             "status": status,
             "rule_extraction": rule_status,
         }
+        # ponytail: also persist the verbatim file text so the runtime
+        # build_system_prompt() can force-feed instruction files into EVERY
+        # LLM call (line-by-line) without re-reading disk on each message.
+        # See agent_factory.build_system_prompt.
+        cfg["instruction_files_text"] = [
+            {"filename": b["filename"], "text": b["text"]}
+            for b in blocks
+        ]
         cfg.pop("execution_guide", None)
         agent.config_json = cfg
         flag_modified(agent, "config_json")

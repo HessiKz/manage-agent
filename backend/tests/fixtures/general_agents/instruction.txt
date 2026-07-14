@@ -1,0 +1,2 @@
+Transform input rows by computing total = qty * price (or units * unit_price).
+Preserve sheet structure. Add a SUM row per data sheet and a Summary sheet for xlsx.

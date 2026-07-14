@@ -4,17 +4,24 @@ import {
   clampCapabilitiesForKind,
 } from "@/lib/capability-rules";
 import { validateFilePolicy } from "@/components/agents/file-policy-form";
-import { scriptSamplesPublishBlock, agentLikelyNeedsScript } from "@/lib/agent-script-samples";
-import { validateReviewAlertsPlan, type AgentWidgetPlan } from "@/lib/widget-plan";
+import {
+  scriptSamplesPublishBlock,
+  agentLikelyNeedsScript,
+  type SampleFileRef,
+} from "@/lib/agent-script-samples";
+import { validateReviewAlertsPlan } from "@/lib/widget-plan";
 import type {
   AgentAction,
   AgentApiBindings,
   AgentCapabilities,
-  AgentFilePolicy,
+  AgentFile,
   AgentKind,
   AgentLink,
   AgentPermissionGrantInput,
+  AgentPromptTemplate,
+  IoFilePolicy,
 } from "@/types";
+import type { AgentWidgetPlan } from "@/lib/widget-plan";
 
 export type WizardStepContext = {
   form: {
@@ -25,8 +32,10 @@ export type WizardStepContext = {
   nameChecking: boolean;
   kind: AgentKind;
   capabilities: AgentCapabilities;
-  filePolicy: AgentFilePolicy;
+  filePolicy: IoFilePolicy;
   stagedFiles: File[];
+  /** Already-uploaded agent files (edit mode) — count toward sample requirements. */
+  existingAgentFiles?: Array<AgentFile | SampleFileRef>;
   actions: AgentAction[];
   links: AgentLink[];
   widgetPlan: AgentWidgetPlan;
@@ -35,6 +44,10 @@ export type WizardStepContext = {
   permissions: AgentPermissionGrantInput[];
   permissionsAllowDefault: boolean;
 };
+
+function sampleFilesForCheck(ctx: WizardStepContext): Array<File | SampleFileRef | AgentFile> {
+  return [...(ctx.existingAgentFiles ?? []), ...ctx.stagedFiles];
+}
 
 export type StepBlock = { title: string; message: string };
 
@@ -74,10 +87,11 @@ function step3Valid(ctx: WizardStepContext): boolean {
     deriveAgentToolNames(ctx.actions),
     ctx.actions
   );
+  const sampleFiles = sampleFilesForCheck(ctx);
   const ioFilesOk =
     !ctx.capabilities.file_upload_enabled ||
-    (!validateFilePolicy(ctx.filePolicy) &&
-      (!scriptSamplesRequired || ctx.stagedFiles.length > 0));
+    (!validateFilePolicy(ctx.filePolicy.input) &&
+      (!scriptSamplesRequired || sampleFiles.length > 0));
   const apiCount =
     ctx.apiBindings.service_ids.length + ctx.apiBindings.endpoint_ids.length;
   const ioApiOk = !ctx.needsApiStep || apiCount > 0;
@@ -172,7 +186,7 @@ export function getStepBlockMessage(
         clamped,
         deriveAgentToolNames(prepareActionsForPublish(ctx.actions)),
         prepareActionsForPublish(ctx.actions),
-        ctx.stagedFiles
+        sampleFilesForCheck(ctx)
       );
       if (sampleBlock) {
         return { title: sampleBlock.title, message: sampleBlock.message };
@@ -188,7 +202,7 @@ export function getStepBlockMessage(
         }
       }
       if (ctx.capabilities.file_upload_enabled) {
-        const policyErr = validateFilePolicy(ctx.filePolicy);
+        const policyErr = validateFilePolicy(ctx.filePolicy.input);
         if (policyErr) return { title: label, message: policyErr };
       }
       if (agentLinksRequired(ctx.kind, ctx.capabilities)) {

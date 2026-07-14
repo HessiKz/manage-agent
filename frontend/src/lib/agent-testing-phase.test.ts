@@ -39,16 +39,17 @@ describe("agent-testing-phase", () => {
     expect(needsTrainingBootstrap(v)).toBe(false);
   });
 
-  it("stays in testing while planning questions await answers even if status is active", () => {
+  it("shows planning questions in the interactive training step (before free chat)", () => {
     const v = {
-      state: "running",
+      state: "planning",
       current_phase: "planning",
       planning: {
         awaiting_answers: true,
         questions: [{ id: "q1", text: "سؤال" }],
       },
     };
-    expect(resolveTestingPhase("active", v)).toBe("testing");
+    expect(resolveTestingPhase("deploying", v)).toBe("training");
+    expect(isAwaitingInteractiveTraining("deploying", v)).toBe(true);
   });
 
   it("reports success only after validation done when status is active", () => {

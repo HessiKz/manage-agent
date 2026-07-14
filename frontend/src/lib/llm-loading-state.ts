@@ -67,6 +67,9 @@ export type GenericLoadingStage = {
 
 export const WIZARD_BOOTSTRAP_STAGES: GenericLoadingStage[] = [
   { id: "persist", label: "ذخیره و ساخت ایجنت" },
+  { id: "upload", label: "آپلود فایل‌های نمونه" },
+  { id: "instructions", label: "کامپایل دستورالعمل" },
   { id: "runtime", label: "آماده‌سازی محیط اجرا" },
+  { id: "planning", label: "تحلیل و سؤالات ایجنت" },
   { id: "training", label: "راه‌اندازی تست تعاملی" },
 ];

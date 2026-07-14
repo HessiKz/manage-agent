@@ -85,6 +85,15 @@ export type AgentFilePolicy = {
   allow_all_types?: boolean;
 };
 
+/** Per-agent file policy split into input and output roles. */
+export type IoFilePolicy = {
+  input: AgentFilePolicy;
+  output: AgentFilePolicy;
+};
+
+/** Backward-compat: legacy flat shape is interpreted as the input policy. */
+export type FilePolicy = IoFilePolicy | AgentFilePolicy;
+
 export type AgentLinkPolicy = {
   max_depth: number;
   default_requires_user_permission: boolean;
@@ -138,6 +147,9 @@ export type AgentFile = {
   filename: string;
   mime_type: string;
   size_bytes: number;
+  /** Optional first-class role from API (instruction | input_sample | output_sample | runtime). */
+  role?: string | null;
+  pair_id?: string | null;
   created_at: string;
 };
 
@@ -150,7 +162,7 @@ export type Agent = {
   status: AgentStatus;
   kind: AgentKind;
   capabilities: AgentCapabilities;
-  file_policy: AgentFilePolicy;
+  file_policy: FilePolicy;
   agent_link_policy: AgentLinkPolicy;
   model_provider: string;
   model_name: string;
@@ -361,10 +373,68 @@ export type InvokeResponse = {
   cost_usd: number;
   duration_ms: number;
   activity_log_id?: string;
+  job_id?: string | null;
   execution_trace?: ExecutionTraceStep[];
   llm_provider?: string | null;
   model_name?: string | null;
 };
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "extracting"
+  | "validating"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timed_out";
+
+export type JobArtifact = {
+  id: string;
+  relative_path: string;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  description?: string | null;
+};
+
+export type ExecutionJob = {
+  id: string;
+  agent_id: string;
+  user_id: string;
+  backend: "native" | "docker";
+  status: JobStatus;
+  precision: string;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string | null;
+  stats: Record<string, unknown>;
+  timeout_seconds?: number;
+  memory_limit_mb?: number;
+  created_at: string;
+  finished_at?: string | null;
+};
+
+/** Full execution-job read DTO as returned by GET /jobs/{jobId} and paginated list. */
+export type ExecutionJobRead = ExecutionJob & {
+  thread_id?: string | null;
+  parent_job_id?: string | null;
+  timeout_seconds?: number;
+  memory_limit_mb?: number;
+  skill_id?: string | null;
+  started_at?: string | null;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  artifacts?: JobArtifact[];
+};
+
+export type JobEvent =
+  | { type: "queued"; job_id: string }
+  | { type: "started"; job_id: string }
+  | { type: "progress"; job_id: string; step: number; total: number }
+  | { type: "artifact"; job_id: string; artifact: JobArtifact }
+  | { type: "validating"; job_id: string }
+  | { type: "done"; job_id: string; artifacts: JobArtifact[] }
+  | { type: "error"; job_id: string; message: string };
 
 export type AgentRouteResponse = {
   agent: {

@@ -1,16 +1,22 @@
 import {
   isInstructionFileName,
   isOutputSampleFileName,
-  isRuntimeSampleFileName,
+  isTrainingInputFileName,
 } from "@/lib/agent-file-roles";
-import type { AgentAction, AgentCapabilities, AgentKind } from "@/types";
+import type { AgentAction, AgentCapabilities, AgentFile, AgentKind } from "@/types";
 
-/** Mirrors backend BUILTIN_FILE_TOOLS — agents with these skip script synthesis. */
-const BUILTIN_FILE_TOOLS = new Set(["karkard_process"]);
+/** Mirrors backend BUILTIN_FILE_TOOLS — empty: all file processing uses scripts. */
+const BUILTIN_FILE_TOOLS = new Set<string>();
 
 const SCRIPT_WORKER_KINDS = new Set(["worker", "file_intake", "spreadsheet"]);
 
 export type ScriptSampleGap = "input" | "output";
+
+/** Any file-like with a name (+ optional DB role) for sample checks. */
+export type SampleFileRef = {
+  name: string;
+  role?: string | null;
+};
 
 export function agentLikelyNeedsScript(
   kind: AgentKind,
@@ -24,13 +30,27 @@ export function agentLikelyNeedsScript(
   ];
   if (declared.some((t) => BUILTIN_FILE_TOOLS.has(t))) return false;
   if (!caps.file_upload_enabled) return false;
-  return SCRIPT_WORKER_KINDS.has(kind as string);
+  if (SCRIPT_WORKER_KINDS.has(kind as string)) return true;
+  if (declared.includes("run_agent_script")) return true;
+  return Boolean(caps.file_upload_enabled && (kind as string) !== "chat");
 }
 
-export function missingScriptSampleGaps(files: File[]): ScriptSampleGap[] {
+function asRef(file: File | SampleFileRef | AgentFile): SampleFileRef {
+  if (file instanceof File) return { name: file.name };
+  if ("filename" in file && typeof (file as AgentFile).filename === "string") {
+    const af = file as AgentFile;
+    return { name: af.filename, role: af.role };
+  }
+  return file as SampleFileRef;
+}
+
+export function missingScriptSampleGaps(
+  files: Array<File | SampleFileRef | AgentFile>
+): ScriptSampleGap[] {
+  const refs = files.map(asRef);
   const gaps: ScriptSampleGap[] = [];
-  if (!files.some((f) => isRuntimeSampleFileName(f.name))) gaps.push("input");
-  if (!files.some((f) => isOutputSampleFileName(f.name))) gaps.push("output");
+  if (!refs.some((f) => isTrainingInputFileName(f.name, f.role))) gaps.push("input");
+  if (!refs.some((f) => isOutputSampleFileName(f.name, f.role))) gaps.push("output");
   return gaps;
 }
 
@@ -39,30 +59,30 @@ export function scriptSamplesPublishBlock(
   caps: AgentCapabilities,
   toolNames: string[],
   actions: Pick<AgentAction, "tool_chain">[],
-  files: File[]
+  files: Array<File | SampleFileRef | AgentFile>
 ): { title: string; message: string; step: string; fallback?: string } | null {
   if (!agentLikelyNeedsScript(kind, caps, toolNames, actions)) return null;
   const gaps = missingScriptSampleGaps(files);
   if (!gaps.length) return null;
 
-  const hasInstruction = files.some((f) => isInstructionFileName(f.name));
+  const refs = files.map(asRef);
+  const hasInstruction = refs.some((f) => isInstructionFileName(f.name, f.role));
   const parts: string[] = [];
   if (gaps.includes("input")) {
-    parts.push("• فایل نمونه ورودی (همان فایل خام کاربر) — در مرحله «فایل و سیاست»");
+    parts.push("• فایل نمونه ورودی (همان فایل خام کاربر) — در مرحله «ورودی و خروجی»");
   }
   if (gaps.includes("output")) {
-    parts.push("• فایل نمونه خروجی مورد انتظار — با آیکن اکسل در «منطق و دستور»");
+    parts.push("• فایل نمونه خروجی مورد انتظار — در مرحله «ورودی و خروجی»");
   }
 
   const intro = hasInstruction
     ? "فایل دستورالعمل (مرجع) را داده‌اید، اما برای ایجنت‌های پردازش فایل علاوه بر آن این‌ها هم لازم است:\n\n"
     : "برای ایجنت‌های پردازش فایل قبل از انتشار این فایل‌ها لازم است:\n\n";
 
-  const step = gaps.includes("input") ? "فایل و سیاست" : "منطق و دستور";
   return {
     title: "فایل‌های نمونه پردازش",
     message: intro + parts.join("\n"),
-    step,
-    fallback: gaps.includes("output") ? "منطق و دستور" : undefined,
+    step: "ورودی و خروجی",
+    fallback: "ورودی و خروجی",
   };
 }

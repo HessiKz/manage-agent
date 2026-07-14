@@ -7,12 +7,22 @@ export type FeatureFlags = {
   run_state_v1: boolean;
   precision_routing_v1: boolean;
   graduated_autonomy_v1: boolean;
+  skill_library_v1: boolean;
+  failure_ledger_v1: boolean;
+  sandbox_execution_enabled: boolean;
+  parallel_supervisor_v1: boolean;
+  sandbox_promotion_hints: boolean;
 };
 
 const DEFAULT_FLAGS: FeatureFlags = {
   run_state_v1: true,
   precision_routing_v1: true,
   graduated_autonomy_v1: false,
+  skill_library_v1: true,
+  failure_ledger_v1: true,
+  sandbox_execution_enabled: false,
+  parallel_supervisor_v1: false,
+  sandbox_promotion_hints: false,
 };
 
 let cached: FeatureFlags | null = null;

@@ -5,14 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from pathlib import Path
-
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from src.core.agent_file_roles import is_instruction_file, is_output_sample_file
 from src.models.agent import Agent
 from src.models.agent_action import AgentAction
 from src.models.agent_file import AgentFile
@@ -35,14 +32,45 @@ class AgentRuntimePrepareService:
         plan = await self._plan(agent)
         cfg = dict(agent.config_json or {})
         cfg["runtime_plan"] = plan
+        # Bake time.ir holidays early so training chat + scripts see them even
+        # before full validation file_setup (karkard agents especially).
+        try:
+            from src.services.holiday_service import (
+                agent_wants_holiday_context,
+                ensure_holiday_calendar,
+            )
+
+            if agent_wants_holiday_context(agent):
+                ensure_holiday_calendar(agent)
+                cfg = dict(agent.config_json or {})
+                cfg["runtime_plan"] = plan
+        except Exception:  # noqa: BLE001
+            pass
         agent.config_json = cfg
         flag_modified(agent, "config_json")
 
         if plan.get("script_needed"):
+            # Do NOT run full LLM script synthesis/verify here. That can take
+            # many minutes (gateway + multi-sheet samples) and blocks the wizard
+            # bootstrap (client times out at 600s). Interactive training only
+            # needs a runtime plan; real synth+verify runs after planning in
+            # AgentValidationService (with live progress).
+            scripts = AgentScriptService(self.db)
             try:
-                meta = await AgentScriptService(self.db).verify(agent, use_llm=True)
-                plan["script_slug"] = meta.get("slug")
-                plan["prepared"] = True
+                existing = dict((agent.config_json or {}).get("workspace_script") or {})
+                if existing.get("verified_at") and existing.get("path"):
+                    plan["script_slug"] = existing.get("slug")
+                    plan["prepared"] = True
+                    plan["script_verify_deferred"] = False
+                else:
+                    meta = await scripts.generate_if_needed(agent, use_llm=False)
+                    plan["script_slug"] = meta.get("slug")
+                    plan["prepared"] = True
+                    plan["script_verify_deferred"] = not bool(meta.get("verified_at"))
+                    plan["reason"] = (
+                        (plan.get("reason") or "")
+                        + " | تأیید اسکریپت پس از آموزش/برنامه‌ریزی انجام می‌شود"
+                    ).strip(" |")
             except Exception as exc:  # noqa: BLE001
                 plan.update(
                     {
@@ -84,14 +112,8 @@ class AgentRuntimePrepareService:
                 "reason": f"اقدام فایل با ابزار داخلی {builtin}.",
             }
 
-        if await self._input_sample_is_karkard(agent):
-            return {
-                "prepared": False,
-                "primary_tool": "karkard_process",
-                "script_needed": False,
-                "reason": "فایل نمونه ورودی کارکرد شناسایی شد.",
-            }
-
+        # Karkard (and any other spreadsheet pipeline) goes through script
+        # synthesis + run_agent_script — no hard-coded karkard_process tool.
         decision = await AgentScriptService(self.db).evaluate(agent)
         return {
             "prepared": False,
@@ -128,14 +150,3 @@ class AgentRuntimePrepareService:
             select(AgentFile).where(AgentFile.agent_id == agent.id).order_by(AgentFile.created_at.desc())
         )
         return list(result.scalars().all())
-
-    async def _input_sample_is_karkard(self, agent: Agent) -> bool:
-        from src.karkard.input_selection import workbook_looks_like_raw_karkard
-
-        for row in await self._files(agent):
-            if is_output_sample_file(row.filename) or is_instruction_file(row.filename):
-                continue
-            path = Path(row.storage_path or "")
-            if path.is_file() and path.suffix.lower() == ".xlsx" and workbook_looks_like_raw_karkard(path):
-                return True
-        return False

@@ -92,7 +92,7 @@ AGENT_EXECUTION_BY_SLUG: dict[str, dict[str, Any]] = {
         "summary": "پردازش فایل خام کارکرد طبق دستورالعمل HR و تولید خروجی نهایی.",
         "responsibilities": [
             "دریافت اکسل کارکرد خام",
-            "اجرای karkard_process",
+            "اجرای run_agent_script (اسکریپت تأییدشده)",
             "تحویل فایل پردازش‌شده و لینک دانلود",
         ],
         "how_to_steps": [

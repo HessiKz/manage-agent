@@ -17,11 +17,11 @@ const FRIENDLY: Record<string, Omit<FriendlyTool, "slug">> = {
     category: "hr",
     whenToUse: "وقتی ایجنت باید داده پرسنل یا حقوق را برای پاسخ یا گزارش بخواند.",
   },
-  karkard_process: {
-    title: "محاسبه کارکرد (اکسل)",
-    summary: "فایل خام کارکرد ماهانه را طبق قوانین HR پردازش و فایل نهایی می‌سازد.",
+  run_agent_script: {
+    title: "اجرای اسکریپت ایجنت",
+    summary: "فایل آپلودشده را با اسکریپت تأییدشده workspace پردازش می‌کند.",
     category: "files",
-    whenToUse: "بعد از آپلود فایل اکسل کارکرد توسط کاربر.",
+    whenToUse: "بعد از آپلود فایل ورودی و آماده بودن اسکریپت ایجنت.",
   },
   report_generate: {
     title: "ساخت گزارش PDF",

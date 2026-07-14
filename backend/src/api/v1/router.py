@@ -15,7 +15,11 @@ from src.api.v1 import (
     budgets,
     dashboards,
     external_apis,
+    failures,
+    job_events,
     knowledge,
+    observability,
+    sandbox_admin,
     notifications,
     platform,
     prompts,
@@ -25,6 +29,8 @@ from src.api.v1 import (
     demo_files,
     client_logs,
     run_state,
+    skills,
+    execution_jobs,
 )
 
 api_router = APIRouter()
@@ -51,3 +57,9 @@ api_router.include_router(access_requests.router, prefix="/access-requests", tag
 api_router.include_router(demo_files.router, tags=["demo-files"])
 api_router.include_router(client_logs.router, prefix="/logs", tags=["logs"])
 api_router.include_router(run_state.router, tags=["run-state"])
+api_router.include_router(execution_jobs.router, tags=["jobs"])
+api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
+api_router.include_router(failures.router, tags=["failures"])
+api_router.include_router(job_events.router, tags=["jobs"])
+api_router.include_router(observability.router, tags=["observability"])
+api_router.include_router(sandbox_admin.router, tags=["sandbox"])

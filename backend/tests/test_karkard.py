@@ -75,14 +75,15 @@ def test_process_karkard_workbook_columns(tmp_path: Path):
     assert any("کسرکار" in h or "تاخیر" in h for h in headers)
 
 
-@pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="formdocs fixture missing")
-def test_karkard_tool_registered():
+def test_karkard_tool_not_registered():
     import src.agents_lib.custom_tools  # noqa: F401
     from src.agents_lib.tool_registry import ToolRegistry
 
-    assert "karkard_process" in ToolRegistry.list_slugs()
+    assert "karkard_process" not in ToolRegistry.list_slugs()
+    assert "run_agent_script" in ToolRegistry.list_slugs()
 
 
+@pytest.mark.skip(reason="karkard_process removed; processing is via run_agent_script + pinned script")
 @pytest.mark.skipif(not _fixture_xlsx().is_file(), reason="formdocs fixture missing")
 def test_karkard_agent_action_flow(
     client: TestClient,
@@ -123,13 +124,13 @@ def test_karkard_agent_action_flow(
                 "require_files_to_invoke": False,
                 "auto_ingest_to_rag": False,
             },
-            "tool_names": ["karkard_process"],
+            "tool_names": ["run_agent_script"],
             "actions": [
                 {
                     "slug": "process_karkard",
                     "label": "محاسبه",
                     "prompt_template": "پردازش کارکرد",
-                    "tool_chain": ["karkard_process"],
+                    "tool_chain": ["run_agent_script"],
                     "input_schema": {},
                 }
             ],
@@ -179,4 +180,4 @@ def test_catalog_karkard_agent_after_seed(client: TestClient, auth_headers: dict
     data = r.json()
     assert data["kind"] == "worker"
     assert data["capabilities"]["file_upload_enabled"] is True
-    assert "karkard_process" in data["tool_names"]
+    assert "run_agent_script" in data["tool_names"]

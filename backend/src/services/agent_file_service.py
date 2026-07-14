@@ -14,6 +14,7 @@ from src.core.agent_file_roles import (
     display_agent_filename,
     is_instruction_file,
     is_output_sample_file,
+    pair_id_from_filename,
 )
 from src.core.file_policy import validate_upload
 from src.models.agent import Agent
@@ -95,15 +96,35 @@ class AgentFileService:
         storage_path = base_dir / storage_name
         storage_path.write_bytes(raw)
 
+        resolved_role = agent_file_role(safe_name)
         af = AgentFile(
             agent_id=agent_id,
             filename=safe_name,
             mime_type=file.content_type or "application/octet-stream",
             size_bytes=len(raw),
             storage_path=str(storage_path),
+            role=resolved_role,
+            pair_id=pair_id_from_filename(safe_name),
         )
         self.db.add(af)
         await self.db.flush()
+
+        # New/replaced samples invalidate pinned script so next validation re-synths.
+        if resolved_role in {"input_sample", "output_sample", "runtime"}:
+            try:
+                from sqlalchemy.orm.attributes import flag_modified
+
+                cfg = dict(agent.config_json or {})
+                ws = dict(cfg.get("workspace_script") or {})
+                if ws.get("verified_at") or ws.get("sample_hash"):
+                    ws.pop("verified_at", None)
+                    ws.pop("sample_hash", None)
+                    cfg["workspace_script"] = ws
+                    agent.config_json = cfg
+                    flag_modified(agent, "config_json")
+                    await self.db.flush()
+            except Exception:  # noqa: BLE001
+                pass
 
         # Instruction files compile into system_prompt — not runtime RAG/input.
         if is_output_sample_file(safe_name) or is_instruction_file(safe_name):

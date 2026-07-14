@@ -7,6 +7,7 @@ import io
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from src.agents_lib.agent_factory import build_llm
 from src.config import settings
@@ -63,11 +65,15 @@ class AgentValidationService:
         "missing data, conflicting instructions, non-standard formats, or anything "
         "that could make the agent produce the wrong output.\n"
         "Return ONLY valid JSON with this exact shape:\n"
-        '{"analysis": "...", "questions": [{"id": "q1", "text": "...", "context": "..."}]}\n'
-        "All user-facing fields MUST be in clear, simple Persian (fa-IR):\n"
+        '{"analysis": "...", "questions": [{"id": "q1", "text": "...", "context": "...", "options": ["گزینه ۱", "گزینه ۲", "گزینه ۳"]}]}'
+        "\nAll user-facing fields MUST be in clear, simple Persian (fa-IR):\n"
         "- analysis: short initial analysis paragraph\n"
         "- questions[].text: the clarifying question\n"
         "- questions[].context: optional short note explaining why this question matters\n"
+        "- questions[].options: 3-5 SHORT Persian answer options. The user will pick ONE.\n"
+        "  Always include options for EVERY question. Make options concrete and mutually\n"
+        "  exclusive single-choice values. The frontend adds a free-text 'سایر' fallback\n"
+        "  yourself, so do not include that as an option. Think Cursor-style quick-replies.\n"
         "Generate at most 5 targeted questions. If everything is clear, return questions: []."
     )
 
@@ -132,9 +138,74 @@ class AgentValidationService:
                     )
                 )
 
+            # File setup first so planning can inspect a real sample path.
+            if (agent.capabilities or {}).get("file_upload_enabled"):
+                await self._publish_phase(
+                    agent_id,
+                    "file_setup",
+                    "در حال آماده‌سازی فایل نمونه برای تست…",
+                )
+                try:
+                    attached_file = await self._get_or_create_sample_file(agent)
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(
+                        ValidationFailure(
+                            phase="file_setup",
+                            message=f"{type(exc).__name__}: {exc}",
+                            fixable_in_admin=self._is_fixable(exc),
+                        )
+                    )
+
+            # Planning may already be done in preflight (before interactive training).
+            # Only re-run if we have no analysis yet.
+            if not planning.get("analysis"):
+                await self._publish_phase(
+                    agent_id,
+                    "planning",
+                    "در حال تحلیل عمیق پیکربندی و فایل‌ها با مدل…",
+                )
+                try:
+                    paused = await self._run_planning_phase(agent, attached_file)
+                    if paused:
+                        return
+                    fresh = await self.db.get(Agent, agent_id)
+                    if fresh:
+                        agent = fresh
+                        planning = dict(
+                            ((fresh.config_json or {}).get("validation") or {}).get("planning")
+                            or {}
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(
+                        ValidationFailure(
+                            phase="planning",
+                            message=f"{type(exc).__name__}: {exc}",
+                            fixable_in_admin=self._is_fixable(exc),
+                        )
+                    )
+
             if (agent.capabilities or {}).get("file_upload_enabled"):
                 script_service = AgentScriptService(self.db)
-                await self._publish_phase(agent_id, "script_evaluate")
+                if planning.get("answers"):
+                    self._stamp_planning_answers(agent, planning)
+                    await self.db.flush()
+                # Refresh io_schema from sample pair for synth prompt.
+                try:
+                    pairs = await script_service._sample_pairs(agent)
+                    if pairs:
+                        from src.services.io_schema_service import build_io_schema_pair, persist_io_schema
+
+                        schema = build_io_schema_pair(pairs[0][0], pairs[0][1])
+                        persist_io_schema(agent, schema)
+                        await self.db.flush()
+                except Exception:  # noqa: BLE001
+                    pass
+
+                await self._publish_phase(
+                    agent_id,
+                    "script_evaluate",
+                    "در حال ارزیابی نیاز به اسکریپت و تولید کد پردازش فایل…",
+                )
                 try:
                     meta = await script_service.generate_if_needed(agent, use_llm=True)
                 except Exception as exc:  # noqa: BLE001
@@ -148,50 +219,37 @@ class AgentValidationService:
                     meta = {}
 
                 if meta.get("needed"):
-                    await self._publish_phase(agent_id, "script_verify")
-                    try:
-                        await script_service.verify(agent, use_llm=True)
-                    except Exception as exc:  # noqa: BLE001
+                    await self._publish_phase(
+                        agent_id,
+                        "script_verify",
+                        "در حال اجرای اسکریپت روی نمونه و مقایسه با خروجی طلایی…",
+                    )
+                    script_meta = await script_service.verify(agent, use_llm=True)
+                    if script_meta.get("last_verify_error"):
                         failures.append(
                             ValidationFailure(
                                 phase="script_verify",
-                                message=f"{type(exc).__name__}: {exc}",
+                                message=script_meta["last_verify_error"],
                                 fixable_in_admin=True,
                             )
                         )
 
-                await self._publish_phase(agent_id, "file_setup")
+                # Bake time.ir national holidays when relevant — best-effort.
                 try:
-                    attached_file = await self._get_or_create_sample_file(agent)
-                except Exception as exc:  # noqa: BLE001
-                    failures.append(
-                        ValidationFailure(
-                            phase="file_setup",
-                            message=f"{type(exc).__name__}: {exc}",
-                            fixable_in_admin=self._is_fixable(exc),
-                        )
-                    )
-
-            if not planning.get("analysis"):
-                await self._publish_phase(agent_id, "planning")
-                try:
-                    paused = await self._run_planning_phase(agent, attached_file)
-                    if paused:
-                        return
-                    fresh = await self.db.get(Agent, agent_id)
-                    if fresh:
-                        agent = fresh
-                except Exception as exc:  # noqa: BLE001
-                    failures.append(
-                        ValidationFailure(
-                            phase="planning",
-                            message=f"{type(exc).__name__}: {exc}",
-                            fixable_in_admin=self._is_fixable(exc),
-                        )
-                    )
+                    from src.services.holiday_service import build_holiday_calendar, stamp_holiday_calendar
+                    table = build_holiday_calendar(agent)
+                    if stamp_holiday_calendar(agent, table):
+                        flag_modified(agent, "config_json")
+                        await self.db.flush()
+                except Exception:  # noqa: BLE001
+                    pass
 
             if (agent.capabilities or {}).get("chat_enabled", True):
-                await self._publish_phase(agent_id, "invoke")
+                await self._publish_phase(
+                    agent_id,
+                    "invoke",
+                    "در حال اجرای تست گفت‌وگوی خودکار با ایجنت…",
+                )
                 try:
                     await self._run_with_timeout_retry(
                         lambda: self.orchestrator.invoke(
@@ -296,7 +354,7 @@ class AgentValidationService:
             await self.db.rollback()
             raise
 
-    async def _publish_phase(self, agent_id, phase: str) -> None:
+    async def _publish_phase(self, agent_id, phase: str, detail: str | None = None) -> None:
         """Expose live validation progress (short-lived session — don't block auth during LLM)."""
         # ponytail: commit main session first — generate_if_needed / file_setup flush() hold
         # a row lock on agent; a second session UPDATE on the same row deadlocks here.
@@ -312,8 +370,24 @@ class AgentValidationService:
             validation = dict(cfg.get("validation") or {})
             validation["state"] = "running"
             validation["current_phase"] = phase
+            label = detail or phase
+            validation["current_detail"] = label
+            validation["script_thinking"] = label
+            log = list(validation.get("thinking_log") or [])
+            log.append(
+                {
+                    "t": datetime.now(timezone.utc).isoformat(),
+                    "phase": phase,
+                    "text": label,
+                }
+            )
+            validation["thinking_log"] = log[-50:]
             cfg["validation"] = validation
             agent.config_json = cfg
+            try:
+                flag_modified(agent, "config_json")
+            except Exception:  # noqa: BLE001
+                pass
             await db.commit()
 
     async def _list_actions(self, agent_id) -> list[AgentAction]:
@@ -333,6 +407,62 @@ class AgentValidationService:
         if existing:
             return existing
         return await self._ensure_sample_file(agent)
+
+
+    async def run_planning_preflight(self, agent: Agent) -> Agent:
+        """Run planning Q&A only (before interactive training).
+
+        Order: prepare samples → planning. Does not synthesize scripts or invoke.
+        If questions are needed, pauses with awaiting_answers. If not, leaves
+        planning.analysis set and does not enter training (caller starts training).
+        """
+        agent_id = agent.id
+        fresh = await self.db.get(Agent, agent_id)
+        if not fresh:
+            return agent
+        agent = fresh
+        validation = dict((agent.config_json or {}).get("validation") or {})
+        planning = dict(validation.get("planning") or {})
+        if planning.get("awaiting_answers") and planning.get("locale") == self.PLANNING_LOCALE:
+            return agent
+        # Already planned with answers or analysis and no pending questions → done
+        if planning.get("analysis") and not planning.get("awaiting_answers"):
+            return agent
+
+        await self._publish_phase(
+            agent_id,
+            "file_setup",
+            "در حال آماده‌سازی فایل نمونه برای تحلیل…",
+        )
+        attached_file = None
+        if (agent.capabilities or {}).get("file_upload_enabled"):
+            try:
+                attached_file = await self._get_or_create_sample_file(agent)
+            except Exception:  # noqa: BLE001
+                attached_file = None
+
+        await self._publish_phase(
+            agent_id,
+            "planning",
+            "در حال تحلیل عمیق پیکربندی و فایل‌ها — سؤالات قبل از تست تعاملی…",
+        )
+        try:
+            await self._run_planning_phase(agent, attached_file)
+        except Exception as exc:  # noqa: BLE001
+            await self._publish_phase(
+                agent_id,
+                "planning",
+                f"تحلیل با خطا مواجه شد: {type(exc).__name__}: {exc}",
+            )
+            # Soft-fail: mark analysis empty so training can still proceed
+            await self._store_planning(
+                agent_id,
+                analysis="تحلیل خودکار در دسترس نبود؛ با نمونه‌ها و دستورالعمل ادامه دهید.",
+                questions=[],
+                awaiting_answers=False,
+            )
+        agent = await self.db.get(Agent, agent_id)
+        return agent or fresh
 
     async def _run_planning_phase(self, agent: Agent, attached_file: AgentFile | None) -> bool:
         """Analyze config/files; pause validation if clarifying questions are needed."""
@@ -389,10 +519,67 @@ class AgentValidationService:
             q["id"] = str(q["id"])
             q["text"] = str(q.get("text") or "").strip()
             q["context"] = str(q.get("context") or "").strip()
+            q["options"] = self._normalize_planning_options(q)
 
         awaiting = bool(questions)
         await self._store_planning(agent.id, analysis, questions, awaiting_answers=awaiting)
         return awaiting
+
+    @staticmethod
+    def _normalize_planning_options(q: dict) -> list[str]:
+        """Always return 3–5 short Persian single-select chips (Cursor-style).
+
+        LLMs often omit ``options``; never leave the UI with only «سایر».
+        """
+        raw = q.get("options") or q.get("choices") or q.get("answers") or []
+        if isinstance(raw, str):
+            raw = [p.strip() for p in re.split(r"[|؛\n/]+", raw) if p.strip()]
+        if not isinstance(raw, list):
+            raw = []
+        opts = [str(o).strip() for o in raw if str(o or "").strip()][:6]
+        opts = [o for o in opts if o not in ("سایر", "سایر…", "other", "Other")]
+        if len(opts) >= 2:
+            return opts[:5]
+        text = str(q.get("text") or "")
+        ctx = str(q.get("context") or "")
+        hay = f"{text} {ctx}"
+        # Domain-aware defaults so chips are useful without a second LLM call.
+        # Domain-neutral defaults first; HR/holiday pads only for matching questions.
+        if any(k in hay for k in ("ستون", "شیت", "خروجی", "ساختار", "عنوان", "csv", "xlsx")):
+            return [
+                "عین ساختار فایل خروجی نمونه",
+                "طبق دستورالعمل (حتی اگر با نمونه فرق کند)",
+                "اولویت با خروجی نمونه",
+                "ساده‌سازی ستون‌ها در حد امکان",
+            ]
+        if any(k in hay for k in ("ورودی", "فایل خام", "نمونه", "اکسل", "csv")):
+            return [
+                "همین فایل ورودی فعلی کافی است",
+                "باید دقیقاً مثل خروجی نمونه باشد",
+                "هر دو فایل را با هم در نظر بگیر",
+                "فقط قوانین متنی مهم است",
+            ]
+        if any(k in hay for k in ("تعطیل", "تقویم", "time.ir", "مناسبت", "holiday", "کارکرد", "مرخصی", "موظف")):
+            return [
+                "از جدول تعطیلات time.ir داخل سیستم",
+                "فقط از فایل دستورالعمل",
+                "از هر دو (time.ir + دستورالعمل)",
+                "طبق فایل خروجی نمونه",
+            ]
+        if opts:
+            base = opts[0]
+            return [
+                base,
+                "طبق دستورالعمل",
+                "طبق خروجی نمونه",
+                "هر دو با اولویت دستورالعمل",
+            ]
+        return [
+            "طبق دستورالعمل",
+            "طبق خروجی/ورودی نمونه",
+            "هر دو با اولویت دستورالعمل",
+            "تصمیم با ایجنت در حد معقول",
+        ]
 
     async def _clear_planning(self, agent_id) -> None:
         async with async_session_maker() as db:
@@ -422,16 +609,33 @@ class AgentValidationService:
                 return
             cfg = dict(agent.config_json or {})
             validation = dict(cfg.get("validation") or {})
-            validation["state"] = "running"
+            validation["state"] = "planning" if awaiting_answers else "running"
             validation["current_phase"] = "planning"
+            # Re-normalize options at store time so older LLM payloads and
+            # partial JSON never persist questions with options=null.
+            safe_questions: list[dict] = []
+            for i, q in enumerate(questions):
+                if not isinstance(q, dict):
+                    continue
+                item = dict(q)
+                item.setdefault("id", f"q{i + 1}")
+                item["id"] = str(item["id"])
+                item["text"] = str(item.get("text") or "").strip()
+                item["context"] = str(item.get("context") or "").strip()
+                item["options"] = AgentValidationService._normalize_planning_options(item)
+                if item["text"]:
+                    safe_questions.append(item)
             validation["planning"] = {
                 "analysis": analysis,
-                "questions": questions,
+                "questions": safe_questions,
                 "awaiting_answers": awaiting_answers,
                 "locale": self.PLANNING_LOCALE,
             }
             cfg["validation"] = validation
             agent.config_json = cfg
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(agent, "config_json")
             await db.commit()
 
     @staticmethod
@@ -525,12 +729,15 @@ class AgentValidationService:
         storage_path = base_dir / storage_name
         storage_path.write_bytes(raw)
 
+        from src.core.agent_file_roles import ROLE_RUNTIME
+
         row = AgentFile(
             agent_id=agent.id,
             filename=filename,
             mime_type=mime,
             size_bytes=len(raw),
             storage_path=str(storage_path),
+            role=ROLE_RUNTIME,
         )
         self.db.add(row)
         await self.db.flush()
@@ -538,27 +745,51 @@ class AgentValidationService:
         return row
 
     def _build_sample_file(self, agent: Agent) -> tuple[str, str, bytes]:
-        policy = agent.file_policy or {}
-        exts = [str(e).lower() for e in (policy.get("allowed_extensions") or [])]
-        tools = {t.lower() for t in (agent.tool_names or [])}
+        from src.core.file_policy import resolve_io_policies
 
-        if "karkard_process" in tools or ".xlsx" in exts or ".xls" in exts:
-            return self._xlsx_sample()
+        inp, _out = resolve_io_policies(agent)
+        exts = [str(e).lower() for e in inp.allowed_extensions]
+        tools = {t.lower() for t in (agent.tool_names or [])}
+        # Prefer headers from config io_examples / io_schema when present.
+        cfg = agent.config_json or {}
+        io_ex = cfg.get("io_examples") or {}
+        if isinstance(io_ex, dict) and io_ex.get("input_text"):
+            return (
+                "sample.txt",
+                "text/plain",
+                str(io_ex["input_text"])[:8000].encode("utf-8", errors="replace"),
+            )
+
+        if "run_agent_script" in tools or ".xlsx" in exts or ".xls" in exts:
+            return self._xlsx_sample(agent)
         if ".csv" in exts:
-            return ("sample.csv", "text/csv", b"name,score\nAli,90\nSara,88\n")
+            return ("sample.csv", "text/csv", b"id,name,value\n1,alpha,10\n2,beta,20\n")
         if ".txt" in exts or not exts:
             return ("sample.txt", "text/plain", b"Sample validation file for agent smoke test.")
         if ".pdf" in exts:
             return ("sample.txt", "text/plain", b"Fallback sample for validation.")
         return ("sample.txt", "text/plain", b"Sample validation file.")
 
-    def _xlsx_sample(self) -> tuple[str, str, bytes]:
+    def _xlsx_sample(self, agent: Agent | None = None) -> tuple[str, str, bytes]:
+        """Domain-neutral smoke workbook (not HR/karkard-shaped)."""
         wb = Workbook()
         ws = wb.active
-        ws.title = "کارکرد"
-        ws.append(["نام", "روز", "ورود", "خروج"])
-        ws.append(["نمونه", "1405-01-01", "08:00", "16:00"])
-        ws.append(["نمونه", "1405-01-02", "08:10", "16:20"])
+        ws.title = "Data"
+        headers = ["id", "name", "qty", "price"]
+        # Optional: first sheet headers from io_schema if available
+        try:
+            schema = ((agent.config_json or {}).get("io_schema") or {}).get("input") if agent else None
+            sheets = (schema or {}).get("sheets") or []
+            if sheets and sheets[0].get("headers"):
+                headers = [str(h) for h in sheets[0]["headers"] if h is not None] or headers
+                if sheets[0].get("name"):
+                    ws.title = str(sheets[0]["name"])[:31]
+        except Exception:  # noqa: BLE001
+            pass
+        ws.append(headers)
+        # two dummy rows matching header width
+        ws.append([1, "alpha", 2, 10][: len(headers)] + [""] * max(0, len(headers) - 4))
+        ws.append([2, "beta", 3, 20][: len(headers)] + [""] * max(0, len(headers) - 4))
         buff = io.BytesIO()
         wb.save(buff)
         return (
@@ -578,11 +809,11 @@ class AgentValidationService:
                 },
                 ensure_ascii=False,
             )
-            if "karkard_process" in tools:
+            if "run_agent_script" in tools:
                 base = (
                     "Automatic validation run. "
                     f"Context for tools (use these exact values when calling tools):\n{ctx}\n"
-                    "Process the uploaded karkard spreadsheet with karkard_process "
+                    "Process the uploaded spreadsheet with run_agent_script "
                     "and return a short confirmation with the download link."
                 )
                 return f"{base}\n\n{clarification}".strip() if clarification else base
@@ -806,6 +1037,31 @@ class AgentValidationService:
                 continue
         if last_exc:
             raise last_exc
+
+    # ponytail: outer rounds loop removed — single verify() pass now (see
+    # comment in validate_after_create). _stamp_planning_answers is called
+    # inline before the single pass; no re-stamp loop. Kept for the import
+    # graph and any future per-action stamping need.
+    def _stamp_planning_answers(self, agent: Agent, planning: dict) -> None:
+        qs = planning.get("questions") or []
+        answers = planning.get("answers") or {}
+        if not qs or not answers:
+            return
+        lines = []
+        for q in qs:
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("id", ""))
+            qtext = str(q.get("text", "")).strip()
+            ans = str(answers.get(qid, "")).strip()
+            if qtext and ans:
+                lines.append(f"Q: {qtext}\nA: {ans}")
+        if not lines:
+            return
+        cfg = dict(agent.config_json or {})
+        cfg["planning_answers_context"] = "\n".join(lines)
+        agent.config_json = cfg
+        flag_modified(agent, "config_json")
 
     def _is_fixable(self, exc: Exception) -> bool:
         if isinstance(exc, asyncio.TimeoutError):

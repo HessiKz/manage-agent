@@ -72,13 +72,13 @@ def test_karkard_download_from_agent_files_dir(
                 "require_files_to_invoke": False,
                 "auto_ingest_to_rag": False,
             },
-            "tool_names": ["karkard_process"],
+            "tool_names": ["run_agent_script"],
             "actions": [
                 {
                     "slug": "process_karkard",
                     "label": "محاسبه",
                     "prompt_template": "پردازش",
-                    "tool_chain": ["karkard_process"],
+                    "tool_chain": ["run_agent_script"],
                     "input_schema": {},
                 }
             ],

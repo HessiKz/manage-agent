@@ -74,7 +74,7 @@ FULL_AGENT_CATALOG: list[dict[str, Any]] = [
             "require_files_to_invoke": False,
             "auto_ingest_to_rag": False,
         },
-        "tool_names": ["karkard_process"],
+        "tool_names": ["run_agent_script"],
         "config_json": {
             "task_profile": "karkard",
             "instruction_doc": "formdocs/ب/دستور محاسبه کارکرد - cloude.ai.docx",
@@ -83,17 +83,10 @@ FULL_AGENT_CATALOG: list[dict[str, Any]] = [
             {
                 "slug": "process_karkard",
                 "label": "محاسبه کارکرد ماهانه",
-                "description": "آپلود فایل خام کارکرد را پردازش و فایل نهایی HR تولید می‌کند",
-                "prompt_template": "فایل کارکرد آپلودشده را طبق دستورالعمل HR پردازش کن.",
-                "input_schema": {
-                    "jalali_year": {"title": "سال شمسی", "type": "integer", "default": 1405},
-                    "company_name": {
-                        "title": "نام شرکت",
-                        "type": "string",
-                        "default": "شرکت توسعه کارآفرینی سوره",
-                    },
-                },
-                "tool_chain": ["karkard_process"],
+                "description": "آپلود فایل خام کارکرد را با اسکریپت تأییدشده ایجنت پردازش می‌کند",
+                "prompt_template": "فایل کارکرد آپلودشده را طبق دستورالعمل HR با اسکریپت ایجنت پردازش کن.",
+                "input_schema": {},
+                "tool_chain": ["run_agent_script"],
                 "order_index": 0,
             },
         ],
@@ -101,7 +94,7 @@ FULL_AGENT_CATALOG: list[dict[str, Any]] = [
             {
                 "slug": "karkard_help",
                 "label": "راهنمای کارکرد",
-                "body": "مراحل محاسبه کارکرد: آپلود اکسل خام → اجرای «محاسبه کارکرد ماهانه» → دانلود خروجی.",
+                "body": "مراحل: آپلود اکسل خام → اجرای «محاسبه کارکرد ماهانه» (اسکریپت) → دانلود خروجی.",
                 "order_index": 0,
             },
         ],

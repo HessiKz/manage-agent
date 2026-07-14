@@ -26,6 +26,7 @@ from src.core.conversation_preview import humanize_output_preview, plain_text_pr
 from src.core.costs import estimate_cost
 from src.core.execution_router import resolve_execution_path, resolve_precision
 from src.core.precision_defaults import ExecutionPath
+from src.services.execution_job_service import ExecutionJobService
 from src.core.file_policy import files_count_for_invoke
 from src.core.agent_file_roles import (
     display_agent_filename,
@@ -86,10 +87,34 @@ def _file_policy(agent: Agent) -> dict:
 
 def _is_llm_unreachable(exc: BaseException) -> bool:
     name = type(exc).__name__
-    if name in ("ConnectTimeout", "ConnectError", "TimeoutException", "APITimeoutError", "ReadTimeout"):
+    if name in (
+        "ConnectTimeout",
+        "ConnectError",
+        "TimeoutException",
+        "APITimeoutError",
+        "ReadTimeout",
+        "APIConnectionError",
+        "InternalServerError",
+        "APIStatusError",
+        "RateLimitError",
+        "ServiceUnavailableError",
+    ):
         return True
     msg = str(exc).lower()
-    return "connecttimeout" in msg or "timeout" in msg or "connection" in msg
+    markers = (
+        "connecttimeout",
+        "timeout",
+        "connection",
+        "bad gateway",
+        "502",
+        "503",
+        "504",
+        "service unavailable",
+        "gateway",
+        "overloaded",
+        "rate limit",
+    )
+    return any(m in msg for m in markers)
 
 
 _DIRECT_AUTO_TOOLS = frozenset(
@@ -292,7 +317,7 @@ class OrchestratorService:
                     )
 
             cache_key = await self._invoke_cache_key(agent, thread_id, payload)
-            skip_cache = preview or "karkard_process" in (agent.tool_names or [])
+            skip_cache = preview or "run_agent_script" in (agent.tool_names or [])
             if not payload.stream and depth == 0 and not payload.action_slug and not skip_cache:
                 cached = CacheService.get_json(self.CACHE_NS, cache_key)
                 if cached and isinstance(cached, dict) and cached.get("output"):
@@ -334,15 +359,47 @@ class OrchestratorService:
             llm_provider = initial_resolved.provider
             model_name = initial_resolved.model
 
-            if path == ExecutionPath.SUPERVISOR and not preview:
-                output = await run_supervisor(
-                    self.db,
-                    agent,
-                    enriched_input,
-                    user,
-                    depth=depth,
-                    thread_id=thread_id,
+            # Sandbox enqueue: do NOT run inline. Create an execution_jobs row and
+            # return immediately. P0 path (pinned run_agent_script) never reaches
+            # here — its precision is deterministic, not autonomous.
+            if path == ExecutionPath.SANDBOX_JOB and not preview:
+                job = await ExecutionJobService(self.db).enqueue_from_invoke(
+                    agent, payload, user
                 )
+                execution_trace.append(
+                    trace_step("sandbox_enqueue", "ثبت در صف اجرای جعبه‌ای", detail=str(job.id))
+                )
+                execution_trace = numbered_trace(execution_trace)
+                return AgentInvokeResponse(
+                    output="کار در صف پردازش قرار گرفت.",
+                    job_id=str(job.id),
+                    execution_trace=execution_trace,
+                )
+
+            if path == ExecutionPath.SUPERVISOR and not preview:
+                # Parallel supervisor v2 only for AUTONOMOUS supervisors and only
+                # when the feature flag is on; otherwise fall back to v1.
+                if (
+                    settings.parallel_supervisor_v1
+                    and agent.kind.canonical == AgentKind.SUPERVISOR
+                    and precision == ExecutionPrecision.AUTONOMOUS
+                ):
+                    from src.agents_lib.supervisor_graph_v2 import run_supervisor_v2
+
+                    resp = await run_supervisor_v2(
+                        self.db, agent, enriched_input, user,
+                        depth=depth, thread_id=thread_id, run_state=run_state,
+                    )
+                    output = resp.output
+                else:
+                    output = await run_supervisor(
+                        self.db,
+                        agent,
+                        enriched_input,
+                        user,
+                        depth=depth,
+                        thread_id=thread_id,
+                    )
                 execution_trace.append(
                     trace_step(
                         "supervisor",
@@ -485,14 +542,18 @@ class OrchestratorService:
                 await self.db.commit()
             if _is_llm_unreachable(exc):
                 raise LlmUnavailableError(
-                    "سرویس LLM در دسترس نیست (اتصال به ارائه‌دهنده مدل قطع شد). "
-                    "کلید API و آدرس پایه (OPENAI_BASE_URL) را در تنظیمات سرور بررسی کنید."
+                    "درگاه مدل موقتاً در دسترس نیست (خطای شبکه/502). "
+                    "لطفاً چند ثانیه بعد دوباره تلاش کنید. "
+                    "اگر ادامه داشت، وضعیت gateway (MIX) را بررسی کنید."
                 ) from exc
             raise AppError(
-                "اجرای ایجنت با خطا مواجه شد. جزئیات در گزارش فعالیت ثبت شده است.",
+                f"اجرای ایجنت با خطا مواجه شد ({type(exc).__name__}). "
+                "جزئیات در گزارش فعالیت ثبت شده است.",
                 code=ErrorCode.ORCHESTRATION_FAILED,
                 status_code=500,
-                details={"type": type(exc).__name__} if settings.app_debug else None,
+                details={"type": type(exc).__name__, "message": str(exc)[:300]}
+                if settings.app_debug
+                else {"type": type(exc).__name__},
                 log_level="error",
             ) from exc
 
@@ -524,7 +585,7 @@ class OrchestratorService:
         """Include latest runtime upload so re-invoke after a new file is not a stale cache hit."""
         parts = [str(agent.id), thread_id, payload.input or "", payload.action_slug or ""]
         tool_names = list(agent.tool_names or [])
-        xlsx_only = "karkard_process" in tool_names
+        xlsx_only = "run_agent_script" in tool_names
         runtime = await self._latest_runtime_file(agent.id, xlsx_only=xlsx_only)
         if runtime:
             parts.append(str(runtime.id))
@@ -582,8 +643,8 @@ class OrchestratorService:
         if script.get("needed") and script.get("slug") and script.get("verified_at"):
             return "run_agent_script"
         tool_names = list(agent.tool_names or [])
-        if "karkard_process" in tool_names:
-            return "karkard_process"
+        if "run_agent_script" in tool_names:
+            return "run_agent_script"
         result = await self.db.execute(
             select(AgentAction)
             .where(AgentAction.agent_id == agent.id)
@@ -612,40 +673,16 @@ class OrchestratorService:
         if not tool_slug:
             return None
 
-        # کارکرد must always go through the LLM (ReAct + karkard_process tool call).
-        if tool_slug == "karkard_process":
-            return None
-
         caps = _caps(agent)
         # Chat-enabled agents use the LLM + tools path unless an explicit action was chosen.
         if caps.get("chat_enabled") and not payload.action_slug:
             return None
 
-        from src.core.agent_training_context import agent_in_interactive_training
-
-        _karkard_words = (
-            "کارکرد",
-            "karkard",
-            "اکسل",
-            "xlsx",
-            "محاسبه",
-            "پردازش",
-            "دانلود",
-            "فایل",
-            "calling these tools via function calling",
-        )
-
-        if kind != AgentKind.WORKER.value and tool_slug != "karkard_process":
+        if kind != AgentKind.WORKER.value and tool_slug != "run_agent_script":
             return None
 
-        if not payload.action_slug and tool_slug == "karkard_process":
-            lower = payload.input.lower()
-            if not any(w in lower for w in _karkard_words):
-                if kind != AgentKind.WORKER.value or agent_in_interactive_training(agent):
-                    return None
-
         runtime_file = await self._latest_runtime_file(
-            agent.id, xlsx_only=(tool_slug == "karkard_process")
+            agent.id, xlsx_only=(tool_slug == "run_agent_script")
         )
         if not runtime_file:
             return None
@@ -820,8 +857,9 @@ class OrchestratorService:
             and not is_instruction_file(f.filename or "")
         ]
         inline_sources = [latest] if latest else runtime_rows[:_INLINE_FILE_CONTEXT_MAX_FILES]
-        # ponytail: never embed truncated xlsx for karkard — forces LLM manual calc on partial data
-        if "karkard_process" not in tool_names:
+        # File-processing agents (run_agent_script) must not get truncated xlsx
+        # inline — that pushes the LLM to invent numbers instead of running the script.
+        if "run_agent_script" not in tool_names:
             for f in inline_sources[:_INLINE_FILE_CONTEXT_MAX_FILES]:
                 path = resolve_storage_path_file(agent.id, f.storage_path)
                 if not path:
@@ -838,16 +876,10 @@ class OrchestratorService:
                 )
 
         if inline_blocks:
-            if "karkard_process" in tool_names:
-                file_instruction = (
-                    "اگر درخواست کاربر پردازش فایل کارکرد/خروجی اکسل است، ابتدا ابزار مناسب را "
-                    "فراخوانی کن؛ برای تحلیل یا پاسخ متنی از محتوای واقعی زیر استفاده کن."
-                )
-            else:
-                file_instruction = (
-                    "پاسخ را بر اساس داده واقعی همین فایل‌ها بساز؛ داده ساختگی نساز. "
-                    "اگر داده لازم در فایل نیست، صریح بگو چه چیزی کم است."
-                )
+            file_instruction = (
+                "پاسخ را بر اساس داده واقعی همین فایل‌ها بساز؛ داده ساختگی نساز. "
+                "اگر داده لازم در فایل نیست، صریح بگو چه چیزی کم است."
+            )
             lines.extend(
                 [
                     "",
@@ -889,12 +921,12 @@ class OrchestratorService:
                 ]
             )
 
-        if latest and "karkard_process" in tool_names:
+        if latest and "run_agent_script" in tool_names:
             lines.append(
-                "برای پردازش کارکرد، ابزار `karkard_process` را با "
+                "برای پردازش فایل، ابزار `run_agent_script` را با "
                 f"storage_path=\"{latest.storage_path}\" و agent_id=\"{agent.id}\" فراخوانی کن. "
                 "فقط همین فایل خام را پردازش کن — نه نمونه خروجی (output-sample__). "
-                "محاسبه دستی در متن پاسخ ممنوع است — خروجی فقط از نتیجه ابزار. "
+                "محاسبه دستی در متن پاسخ ممنوع است — خروجی فقط از نتیجه اسکریپت. "
                 "در پاسخ کاربر حتماً download_path به شکل /api/v1/agents/.../workspace/... بده."
             )
         elif latest:

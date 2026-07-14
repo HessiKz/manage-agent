@@ -1,7 +1,7 @@
 import {
   canonicalAgentKind,
-  DEFAULT_FILE_POLICY,
   EMPTY_API_BINDINGS,
+  filePolicyForRole,
   KIND_PRESETS,
   parseApiBindings,
 } from "@/lib/agent-presets";
@@ -60,7 +60,7 @@ export function agentToEditorDraft(
     department: agent.department ?? "ops",
     kind: canonicalAgentKind(agent.kind),
     capabilities: agent.capabilities ?? KIND_PRESETS.chat,
-    filePolicy: agent.file_policy ?? DEFAULT_FILE_POLICY,
+    filePolicy: filePolicyForRole(agent.file_policy, "input"),
     linkPolicy: agent.agent_link_policy ?? {
       max_depth: 3,
       default_requires_user_permission: true,
@@ -91,7 +91,7 @@ export function agentEditorGuideStale(agent: Agent, draft: AgentEditorDraft): bo
     draft.department !== (agent.department ?? "ops") ||
     draft.kind !== canonicalAgentKind(agent.kind) ||
     stableJson(draft.capabilities) !== stableJson(agent.capabilities ?? {}) ||
-    stableJson(draft.filePolicy) !== stableJson(agent.file_policy ?? {}) ||
+    stableJson(draft.filePolicy) !== stableJson(filePolicyForRole(agent.file_policy, "input")) ||
     draft.systemPrompt.trim() !== (agent.system_prompt ?? "").trim() ||
     stableJson(toolNamesFromActions) !== stableJson(agent.tool_names ?? []) ||
     stableJson(draft.actions) !== stableJson(agent.actions ?? []) ||

@@ -16,6 +16,7 @@ from src.schemas.agent_capabilities import (
     AgentCapabilities,
     AgentFilePolicy,
     AgentLinkPolicy,
+    IoFilePolicy,
     capabilities_for_kind,
     clamp_capabilities_for_kind,
     file_policy_for_kind,
@@ -39,7 +40,13 @@ class AgentBase(BaseModel):
     department: str | None = None
     kind: AgentKind = AgentKind.CHAT
     capabilities: AgentCapabilities = Field(default_factory=AgentCapabilities)
-    file_policy: AgentFilePolicy = Field(default_factory=AgentFilePolicy)
+    file_policy: IoFilePolicy = Field(default_factory=IoFilePolicy)
+
+    @field_validator("file_policy", mode="before")
+    @classmethod
+    def _coerce_file_policy_field(cls, value: object) -> IoFilePolicy:
+        return _coerce_file_policy(value)
+
     agent_link_policy: AgentLinkPolicy = Field(default_factory=AgentLinkPolicy)
     model_provider: str = "openai"
     model_name: str = "claude-opus-4-8"
@@ -55,13 +62,37 @@ class AgentBase(BaseModel):
     config_json: dict = {}
 
 
-def _validate_file_policy_when_upload(caps: AgentCapabilities, fp: AgentFilePolicy) -> None:
-    if not caps.file_upload_enabled:
-        return
+def _validate_single_policy(fp: AgentFilePolicy) -> None:
     if fp.allow_all_types:
         return
     if not fp.allowed_mime_types and not fp.allowed_extensions:
         raise ValueError("file_policy must include allowed_mime_types or allowed_extensions")
+
+
+def _validate_file_policy_when_upload(caps: AgentCapabilities, fp: AgentFilePolicy | IoFilePolicy) -> None:
+    if not caps.file_upload_enabled:
+        return
+    if isinstance(fp, IoFilePolicy):
+        _validate_single_policy(fp.input)
+        _validate_single_policy(fp.output)
+    else:
+        _validate_single_policy(fp)
+
+
+def _coerce_file_policy(value: object) -> IoFilePolicy:
+    if value is None or (isinstance(value, dict) and not value):
+        return IoFilePolicy()
+    if isinstance(value, IoFilePolicy):
+        return value
+    if isinstance(value, dict):
+        if isinstance(value.get("input"), dict) or isinstance(value.get("output"), dict):
+            return IoFilePolicy(
+                input=AgentFilePolicy.model_validate(value.get("input") or {}),
+                output=AgentFilePolicy.model_validate(value.get("output") or {}),
+            )
+        # Legacy flat shape — interpret as the input policy.
+        return IoFilePolicy(input=AgentFilePolicy.model_validate(value))
+    return IoFilePolicy()
 
 
 class AgentPermissionGrant(BaseModel):
@@ -209,7 +240,15 @@ class AgentUpdate(BaseModel):
     department: str | None = None
     kind: AgentKind | None = None
     capabilities: AgentCapabilities | None = None
-    file_policy: AgentFilePolicy | None = None
+    file_policy: IoFilePolicy | None = None
+
+    @field_validator("file_policy", mode="before")
+    @classmethod
+    def _coerce_file_policy_field(cls, value: object) -> IoFilePolicy | None:
+        if value is None:
+            return None
+        return _coerce_file_policy(value)
+
     agent_link_policy: AgentLinkPolicy | None = None
     status: AgentStatus | None = None
     model_provider: str | None = None
@@ -335,6 +374,7 @@ class AgentInvokeResponse(BaseModel):
     execution_trace: list[ExecutionTraceStep] = Field(default_factory=list)
     llm_provider: str | None = None
     model_name: str | None = None
+    job_id: str | None = None
 
 
 class AgentRouteRequest(BaseModel):

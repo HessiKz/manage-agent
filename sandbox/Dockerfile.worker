@@ -1,0 +1,19 @@
+# Worker image: the backend app + docker CLI so it can spawn sandbox containers
+# and consume the Redis job queue. Built from the repo root alongside the backend.
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Backend source + venv deps. Assumes the host installs deps at build time.
+COPY backend/ /app/backend/
+COPY scripts/ /app/scripts/
+
+WORKDIR /app/backend
+ENV PYTHONPATH=/app/backend
+ENV PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["./venv/bin/python", "scripts/sandbox_worker.py"]

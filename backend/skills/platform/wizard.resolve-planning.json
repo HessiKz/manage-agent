@@ -1,0 +1,56 @@
+{
+  "slug": "wizard.resolve-planning",
+  "name": "Resolve planning questions",
+  "name_fa": "حل سوالات برنامه‌ریزی",
+  "description": "Auto-resolve the interactive planning-questions step of agent validation by answering with stored context.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["planning"],
+    "run_state": { "marker_planning_questions": true },
+    "min_autonomy_level": 2,
+    "priority": 85
+  },
+  "procedure": {
+    "label": "حل خودکار سوالات برنامه‌ریزی",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.resolve_planning",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "پاسخ به سوالات برنامه‌ریزی و ادامه"
+      }
+    ]
+  },
+  "content_md": "When the run state shows the wizard-planning-questions marker, auto-answer the planning questions using stored create payload and resume validation via the wizard.resolve_planning bridge."
+}
+{
+  "slug": "wizard.resolve-planning",
+  "name": "Resolve planning questions",
+  "name_fa": "حل سوالات برنامه‌ریزی",
+  "description": "Auto-resolve the interactive planning-questions step of agent validation by answering with stored context.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["planning"],
+    "run_state": { "marker_planning_questions": true },
+    "min_autonomy_level": 2,
+    "priority": 85
+  },
+  "procedure": {
+    "label": "حل خودکار سوالات برنامه‌ریزی",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.resolve_planning",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "پاسخ به سوالات برنامه‌ریزی و ادامه"
+      }
+    ]
+  },
+  "content_md": "When the run state shows the wizard-planning-questions marker, auto-answer the planning questions using stored create payload and resume validation via the wizard.resolve_planning bridge."
+}

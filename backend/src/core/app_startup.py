@@ -63,17 +63,6 @@ async def run_deferred_startup() -> None:
         log.warning("catalog_agents.upgrade_failed", error=str(exc))
 
     try:
-        from src.database.session import async_session_maker
-        from src.services.karkard_workspace_service import ensure_catalog_karkard_outputs
-
-        async with async_session_maker() as db:
-            n = await ensure_catalog_karkard_outputs(db)
-            if n:
-                log.info("karkard.demo_output.ensured", count=n)
-    except Exception as exc:
-        log.warning("karkard.demo_output.ensure_failed", error=str(exc))
-
-    try:
         from pathlib import Path
 
         from src.core.workspace_output_registry import reconcile_all_agent_manifests

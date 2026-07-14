@@ -127,9 +127,15 @@ def resolve(model_name: str | None = None) -> ResolvedLLM:
             api_key=cursor["api_key"] or "cursor-to-api",
             model=model,
         )
+    # OpenAI-compatible gateway. Some gateways (e.g. keyless workers.dev
+    # proxies) need no API key; ChatOpenAI still requires a non-empty string,
+    # so inject a placeholder when none is configured but a base_url exists.
+    key = settings.openai_api_key
+    if not key and settings.openai_base_url:
+        key = "no-key-required"
     return ResolvedLLM(
         provider="gateway",
         base_url=settings.openai_base_url,
-        api_key=settings.openai_api_key,
+        api_key=key,
         model=model,
     )

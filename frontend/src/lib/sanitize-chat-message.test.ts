@@ -30,4 +30,24 @@ describe("sanitizeChatMessage", () => {
     const out = formatAssistantOutput("   ");
     expect(out.length).toBeGreaterThan(10);
   });
+
+  it("strips MIX gateway routing tags", () => {
+    const out = sanitizeChatMessage(
+      "[MIX → se/pie/grok-4.5] سلام، وضعیت سیستم عادی است.",
+      "assistant"
+    );
+    expect(out).not.toContain("MIX");
+    expect(out).not.toMatch(/grok/i);
+    expect(out).toContain("سلام");
+  });
+
+  it("strips repeated MIX tags mid-text", () => {
+    const out = sanitizeChatMessage(
+      "[MIX → se/pie/grok-4.5]\nخط اول\n[MIX → other/model] خط دوم",
+      "assistant"
+    );
+    expect(out).not.toContain("MIX");
+    expect(out).toContain("خط اول");
+    expect(out).toContain("خط دوم");
+  });
 });

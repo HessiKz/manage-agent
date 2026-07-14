@@ -13,7 +13,7 @@ from src.core.precision_defaults import (
     precision_for_kind,
     precision_from_config,
 )
-from src.models.agent import Agent
+from src.models.agent import Agent, AgentKind
 from src.schemas.agent import AgentInvokeRequest
 
 
@@ -32,8 +32,8 @@ def resolve_execution_path(
     Decision matrix (P = precision, chat = chat_enabled, action = action_slug,
     primary = runtime primary_tool):
 
-    deterministic + action set + (run_agent_script | karkard_process):
-        -> AUTO_TOOL when script, REACT when karkard (tool call required, no bypass)
+    deterministic + action set + run_agent_script:
+        -> AUTO_TOOL (pinned workspace script; no hard-coded domain processor)
     guided/autonomous + chat_enabled + tools:
         -> SUPERVISOR if supervisor_enabled else REACT
     else (no tools):
@@ -52,13 +52,22 @@ def resolve_execution_path(
         if action_slug:
             if primary == "run_agent_script" or "run_agent_script" in tool_names:
                 return ExecutionPath.AUTO_TOOL
-            if "karkard_process" in tool_names:
-                return ExecutionPath.REACT  # tool call required; no LLM-free bypass
         if not action_slug and primary == "run_agent_script":
             return ExecutionPath.AUTO_TOOL
 
     if bool(caps.get("supervisor_enabled")):
         return ExecutionPath.SUPERVISOR
+
+    # Autonomous worker whose runtime requests the sandbox backend enqueues an
+    # async execution_job instead of running inline. P0 path (pinned
+    # run_agent_script) stays native — it never reaches here because its
+    # precision is deterministic, not autonomous.
+    if precision == ExecutionPrecision.AUTONOMOUS and (
+        AgentKind.canonical(agent.kind) == AgentKind.WORKER
+    ):
+        runtime = agent.config_json or {}
+        if runtime.get("runtime", {}).get("execution_backend") == "sandbox":
+            return ExecutionPath.SANDBOX_JOB
 
     if chat_enabled or action_slug:
         return ExecutionPath.REACT

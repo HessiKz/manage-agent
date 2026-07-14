@@ -99,7 +99,7 @@ def _agent():
 async def test_verify_repairs_bad_first_synthesis(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     fake = _FakeLLM([_BAD_SCRIPT, _GOOD_SCRIPT])
-    monkeypatch.setattr(agent_script_service, "_build_llm", lambda: fake)
+    monkeypatch.setattr(agent_script_service, "_build_llm", lambda agent=None: fake)
 
     agent = _agent()
     root = tmp_path / "var" / "agent_files" / str(agent.id)

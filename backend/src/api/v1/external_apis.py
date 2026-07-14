@@ -10,7 +10,6 @@ from src.schemas.external_api import (
     ExternalApiEndpointRead,
     ExternalApiServiceCreate,
     ExternalApiServiceRead,
-    ExternalApiTestRequest,
 )
 from src.agents_lib.dynamic_tools import DynamicToolLoader
 from src.services.external_api_service import ExternalApiServiceLayer
@@ -67,13 +66,5 @@ async def create_endpoint(
     return ep
 
 
-@router.post("/endpoints/{endpoint_id}/test")
-async def test_endpoint(
-    endpoint_id: UUID,
-    payload: ExternalApiTestRequest,
-    db: DB,
-    _user: CurrentUser,
-):
-    return await ExternalApiServiceLayer(db).test_endpoint(
-        endpoint_id, payload.params, payload.body
-    )
+# ponytail: the per-endpoint "test connection" button was a dev/test affordance
+# and has been removed (see changelog). Endpoint CRUD + agent bindings remain.

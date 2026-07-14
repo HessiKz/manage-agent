@@ -138,12 +138,83 @@ FILE_POLICY_SPREADSHEET = AgentFilePolicy(
 )
 
 
+class IoFilePolicy(BaseModel):
+    """Per-agent file policy split into input and output roles.
+
+    Stored as a single JSONB column on Agent.file_policy with shape
+    {"input": {...}, "output": {...}}. Legacy flat shapes are interpreted
+    as the input policy by resolve_io_policies.
+    """
+
+    input: AgentFilePolicy = Field(default_factory=AgentFilePolicy)
+    output: AgentFilePolicy = Field(default_factory=AgentFilePolicy)
+
+    @model_validator(mode="after")
+    def validate_input_output_ranges(self) -> IoFilePolicy:
+        self.input.validate_ranges()
+        self.output.validate_ranges()
+        return self
+
+
+FILE_POLICY_LOOSE = AgentFilePolicy(
+    min_files=0,
+    max_files=20,
+    max_file_size_mb=50,
+    max_total_size_mb=500,
+    allowed_mime_types=[],
+    allowed_extensions=[],
+    require_files_to_invoke=False,
+    auto_ingest_to_rag=True,
+    allow_all_types=True,
+)
+
+FILE_POLICY_DOCS_OUTPUT = AgentFilePolicy(
+    min_files=0,
+    max_files=20,
+    max_file_size_mb=50,
+    max_total_size_mb=500,
+    allowed_mime_types=[
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+        "application/pdf",
+        "text/plain",
+        "text/csv",
+    ],
+    allowed_extensions=[".xlsx", ".xls", ".docx", ".doc", ".pdf", ".txt", ".csv"],
+    require_files_to_invoke=False,
+    auto_ingest_to_rag=False,
+)
+
+
 def file_policy_for_kind(kind: AgentKind, overrides: dict | None = None) -> dict:
-    preset = AgentFilePolicy()
-    base = preset.model_dump()
-    if overrides:
-        base.update({k: v for k, v in overrides.items() if v is not None})
-    return base
+    """Per-kind I/O file-policy preset container.
+
+    Returns a dict shaped {"input": {...}, "output": {...}}. A legacy flat
+    override dict is interpreted as the input policy (backward-compat).
+    """
+    canonical = canonical_agent_kind(kind)
+    if canonical == AgentKind.CHAT:
+        io = IoFilePolicy(input=FILE_POLICY_LOOSE, output=FILE_POLICY_DOCS_OUTPUT)
+    elif canonical == AgentKind.WORKER:
+        io = IoFilePolicy(input=FILE_POLICY_BULK_INTAKE, output=FILE_POLICY_DOCS_OUTPUT)
+    elif canonical == AgentKind.SUPERVISOR:
+        io = IoFilePolicy()
+    else:
+        io = IoFilePolicy()
+    return _apply_io_overrides(io, overrides)
+
+
+def _apply_io_overrides(io: IoFilePolicy, overrides: dict | None) -> dict:
+    if not overrides:
+        return io.model_dump()
+    if isinstance(overrides.get("input"), dict) or isinstance(overrides.get("output"), dict):
+        inp = AgentFilePolicy.model_validate(overrides.get("input") or io.input.model_dump())
+        out = AgentFilePolicy.model_validate(overrides.get("output") or io.output.model_dump())
+        return IoFilePolicy(input=inp, output=out).model_dump()
+    inp = AgentFilePolicy.model_validate({**io.input.model_dump(), **overrides})
+    return IoFilePolicy(input=inp, output=io.output).model_dump()
 
 
 def file_policy_for_capabilities(
@@ -156,7 +227,7 @@ def file_policy_for_capabilities(
         caps = AgentCapabilities.model_validate(caps)
     base = AgentFilePolicy().model_dump()
     if caps.file_upload_enabled:
-        if tool_names and "karkard_process" in tool_names:
+        if tool_names and "run_agent_script" in tool_names:
             base = FILE_POLICY_SPREADSHEET.model_dump()
         elif caps.actions_enabled is False and caps.chat_enabled is False:
             base = FILE_POLICY_BULK_INTAKE.model_dump()

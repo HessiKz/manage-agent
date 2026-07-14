@@ -108,16 +108,20 @@ class PlatformSettingsService:
     # ── support autonomy default (Phase 1 M3) ─────────────────────
 
     async def get_autonomy_default(self) -> int:
-        from src.services.autonomy_policy_service import AutonomyLevel
+        from src.services.autonomy_policy_service import (
+            AUTONOMY_DEFAULT_KEY,
+            AutonomyLevel,
+        )
 
-        value = await self.get_value(AutonomyLevel.AUTONOMY_DEFAULT_KEY)
+        value = await self.get_value(AUTONOMY_DEFAULT_KEY)
         return AutonomyLevel.coerce((value or {}).get("level"))
 
     async def set_autonomy_default(self, level: int) -> int:
-        from src.services.autonomy_policy_service import AutonomyLevel
+        from src.services.autonomy_policy_service import (
+            AUTONOMY_DEFAULT_KEY,
+            AutonomyLevel,
+        )
 
         coerced = AutonomyLevel.coerce(level)
-        await self.set_value(
-            AutonomyLevel.AUTONOMY_DEFAULT_KEY, {"level": coerced}
-        )
+        await self.set_value(AUTONOMY_DEFAULT_KEY, {"level": coerced})
         return coerced

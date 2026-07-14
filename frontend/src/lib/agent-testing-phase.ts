@@ -2,14 +2,24 @@ import type { AgentStatus } from "@/types";
 
 export const PLANNING_LOCALE = "fa-IR";
 
+export type ValidationThinkingEntry = {
+  t?: string;
+  phase?: string;
+  text?: string;
+};
+
 export type ValidationReport = {
   ok?: boolean;
   state?: string;
   current_phase?: string;
+  current_detail?: string;
+  script_thinking?: string;
+  /** Recent live activity lines from backend (newest last). */
+  thinking_log?: ValidationThinkingEntry[];
   training_completed?: boolean;
   planning?: {
     analysis?: string;
-    questions?: { id: string; text: string; context?: string }[];
+    questions?: { id: string; text: string; context?: string; options?: string[] }[];
     awaiting_answers?: boolean;
     answers?: Record<string, string>;
     locale?: string;
@@ -35,8 +45,16 @@ export function isAwaitingInteractiveTraining(
   if (validation?.training_completed) return false;
   const state = validation?.state ?? "";
   const phase = validation?.current_phase ?? "";
+  // Planning questions are part of the interactive step (before free chat).
+  if (
+    validation?.planning?.awaiting_answers &&
+    (validation.planning?.questions?.length ?? 0) > 0
+  ) {
+    return true;
+  }
+  if (state === "planning" || phase === "planning") return true;
   if (state === "training" || phase === "training") return true;
-  // Wizard publish leaves agents here until /training/start runs.
+  // Wizard publish leaves agents here until /training/start or planning preflight.
   if (state === "runtime_prepare" || phase === "runtime_prepare") return true;
   if (
     (state === "pending" || !state) &&
@@ -58,11 +76,22 @@ export function resolveTestingPhase(
   status: AgentStatus | undefined,
   validation: ValidationReport | null
 ): "training" | "dashboard_review" | "testing" | "success" | "error" | "warning" {
+  // Planning questions are asked BEFORE interactive chat, in the training
+  // step. If questions are pending, show them in the training panel; once
+  // answered, training chat opens.
   if (
     validation?.planning?.awaiting_answers &&
     (validation.planning?.questions?.length ?? 0) > 0
   ) {
-    return "testing";
+    return "training";
+  }
+  // When planning completed (no questions or answers submitted) but training
+  // hasn't been started yet, show the planning-done-transition-to-training state.
+  if (
+    validation?.state === "planning" &&
+    !validation?.planning?.awaiting_answers
+  ) {
+    return "training";
   }
   if (status === "active" && validation?.state === "done") return "success";
   if (status === "active" && !validation?.state) return "success";

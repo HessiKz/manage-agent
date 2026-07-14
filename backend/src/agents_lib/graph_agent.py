@@ -502,6 +502,10 @@ async def _stream_graph_execution(
             chunk = event.get("data", {}).get("chunk")
             token = _normalize_ai_content(getattr(chunk, "content", "")) if chunk else ""
             if token:
+                from src.core.chat_sanitize import strip_gateway_route_tags
+
+                token = strip_gateway_route_tags(token, collapse=False)
+            if token:
                 yield "token", token
         elif kind == "on_tool_start":
             raw = event.get("name") or event.get("data", {}).get("name") or "tool"
@@ -545,6 +549,10 @@ async def run_react_agent_stream(
         parts: list[str] = []
         async for chunk in llm.astream(messages):
             token = _normalize_ai_content(getattr(chunk, "content", ""))
+            if token:
+                from src.core.chat_sanitize import strip_gateway_route_tags
+
+                token = strip_gateway_route_tags(token, collapse=False)
             if not token:
                 continue
             parts.append(token)
@@ -589,7 +597,7 @@ async def run_react_agent_stream(
         yield ReactStreamItem(result=forced_create)
         return
 
-    if resolved.provider == "cursor" and "karkard_process" not in names:
+    if resolved.provider == "cursor" and "run_agent_script" not in names:
         direct = await run_cursor_tools_agent(agent, user_input, history, tool_names=names)
         if direct is not None:
             if direct.output:
@@ -615,6 +623,10 @@ async def run_react_agent_stream(
         parts = []
         async for chunk in llm.astream(messages):
             token = _normalize_ai_content(getattr(chunk, "content", ""))
+            if token:
+                from src.core.chat_sanitize import strip_gateway_route_tags
+
+                token = strip_gateway_route_tags(token, collapse=False)
             if not token:
                 continue
             parts.append(token)
@@ -708,7 +720,7 @@ async def run_react_agent(
     if forced_create is not None:
         return forced_create
 
-    if resolved.provider == "cursor" and "karkard_process" not in names:
+    if resolved.provider == "cursor" and "run_agent_script" not in names:
         direct = await run_cursor_tools_agent(
             agent, user_input, history, tool_names=names
         )

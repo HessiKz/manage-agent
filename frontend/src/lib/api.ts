@@ -1,9 +1,11 @@
 import axios, { type AxiosError } from "axios";
 import { parseApiError } from "@/lib/errors";
 import { handleApiError } from "@/lib/api-error-handler";
+import { stripGatewayRouteTags } from "@/lib/sanitize-chat-message";
 import {
   canonicalAgentKind,
   DEFAULT_FILE_POLICY,
+  DEFAULT_IO_POLICY,
   KIND_PRESETS,
 } from "@/lib/agent-presets";
 import { normalizeAgentDashboard } from "@/lib/normalize-agent-dashboard";
@@ -189,7 +191,7 @@ function normalizeAgent(raw: Agent): Agent {
     ...raw,
     kind: canonicalAgentKind(raw.kind),
     capabilities: raw.capabilities ?? KIND_PRESETS.chat,
-    file_policy: raw.file_policy ?? DEFAULT_FILE_POLICY,
+    file_policy: raw.file_policy ?? DEFAULT_IO_POLICY,
     agent_link_policy: raw.agent_link_policy ?? {
       max_depth: 3,
       default_requires_user_permission: true,
@@ -796,8 +798,10 @@ export async function invokeAgentStream(
         callbacks?.onGeneratingStart?.();
       }
       if (json.token) {
+        const token = stripGatewayRouteTags(String(json.token), false);
+        if (!token) continue;
         callbacks?.onToken?.();
-        onToken(json.token);
+        onToken(token);
       }
       if (json.error) {
         throw parseApiError({
@@ -810,8 +814,8 @@ export async function invokeAgentStream(
       }
       if (json.done) {
         if (typeof json.output === "string" && json.output.trim()) {
-          finalOutput = json.output;
-          onFinalOutput?.(json.output);
+          finalOutput = stripGatewayRouteTags(json.output);
+          onFinalOutput?.(finalOutput);
         }
         const fromList = Array.isArray(json.ui_actions)
           ? json.ui_actions.map(parseSupportUiAction).filter(Boolean)
@@ -911,15 +915,14 @@ export async function createExternalApiEndpoint(
 }
 
 export async function testExternalApiEndpoint(
-  endpointId: string,
-  params: Record<string, unknown> = {},
-  body: Record<string, unknown> = {}
-): Promise<unknown> {
-  const { data } = await api.post(`/external-apis/endpoints/${endpointId}/test`, {
-    params,
-    body,
-  });
-  return data;
+  _endpointId: string,
+  _params: Record<string, unknown> = {},
+  _body: Record<string, unknown> = {}
+): Promise<never> {
+  // ponytail: backend "test connection" endpoint removed; this stub lives only
+  // to keep the typed import surface stable. Callers that used this should be
+  // deleted in a separate frontend cleanup pass.
+  throw new Error("testExternalApiEndpoint has been removed from the backend");
 }
 
 export async function ingestKnowledge(
@@ -1042,6 +1045,12 @@ export async function startAgentValidation(agentId: string): Promise<{
     `/agents/${agentId}/validate`
   );
   return data;
+}
+
+/** Run planning Q&A before interactive training. */
+export async function planAgentPreflight(agentId: string): Promise<Agent> {
+  const { data } = await apiLong.post<Agent>(`/agents/${agentId}/planning/preflight`);
+  return normalizeAgent(data);
 }
 
 export async function prepareAgentRuntime(agentId: string): Promise<Agent> {

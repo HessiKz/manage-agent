@@ -108,7 +108,7 @@ AGENT_DEMO_SNIPPETS: dict[str, str] = {
     ),
     "example-karkard": (
         "ایجنت کارکرد — فایل اکسل دمو (demo-karkard-raw.xlsx) از قبل در workspace بارگذاری شده. "
-        "بدون درخواست از کاربر، ابزار karkard_process را با storage_path همان فایل فراخوانی کن و "
+        "بدون درخواست از کاربر، ابزار run_agent_script را با storage_path همان فایل فراخوانی کن و "
         "لینک دانلود خروجی پردازش‌شده را برگردان."
     ),
 }
@@ -121,9 +121,9 @@ DEMO_BASE_RULES = """
 
 KARKARD_DEMO_RULES = """
 ایجنت کارکرد: فایل اکسل دمو از قبل در workspace است — از کاربر فایل نخواه.
-با reasoning مدل، ابزار `karkard_process` را از طریق function calling فراخوانی کن (نه اجرای دستی خارج از LLM).
+با reasoning مدل، ابزار `run_agent_script` را از طریق function calling فراخوانی کن (نه اجرای دستی خارج از LLM).
 از `storage_path` کامل و `agent_id` در context ابزار استفاده کن؛ نام کوتاه فایل کافی نیست.
-پس از اجرای ابزار، لینک دانلود و خلاصه را به کاربر بده.
+پس از اجرای اسکریپت، لینک دانلود و خلاصه را به کاربر بده.
 """.strip()
 
 _KARKARD_SLUGS = frozenset({"example-karkard"})

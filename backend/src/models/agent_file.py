@@ -25,3 +25,7 @@ class AgentFile(Base, UUIDPkMixin, TimestampMixin):
      mime_type: Mapped[str] = mapped_column(String(127), nullable=False, default="application/octet-stream")
      size_bytes: Mapped[int] = mapped_column(nullable=False, default=0)
      storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+     # Optional first-class role (instruction | input_sample | output_sample | runtime).
+     # Null rows still resolve via filename prefixes in agent_file_roles.
+     role: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+     pair_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

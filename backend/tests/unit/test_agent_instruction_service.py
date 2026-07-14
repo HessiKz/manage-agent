@@ -26,7 +26,7 @@ def test_instruction_fallback_prompt_uses_text_and_file_content():
         department="hr",
         kind="worker",
         capabilities={"file_upload_enabled": True, "actions_enabled": True},
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
     )
     blocks = [{"filename": "دستور کارکرد.docx", "text": "ستون تاریخ و اضافه‌کار را دقیق محاسبه کن."}]
     rules = [{"text": "پنجشنبه و جمعه روز کاری نیست", "source": "doc", "confidence": "heuristic"}]

@@ -20,7 +20,7 @@ def test_action_run_invokes_orchestrator(monkeypatch: pytest.MonkeyPatch):
         id=uuid.uuid4(),
         name="Test",
         slug="test-agent",
-        tool_names=["karkard_process"],
+        tool_names=["run_agent_script"],
         capabilities={"actions_enabled": True, "chat_enabled": True},
     )
     action = AgentAction(
@@ -29,7 +29,7 @@ def test_action_run_invokes_orchestrator(monkeypatch: pytest.MonkeyPatch):
         slug="process_karkard",
         label="محاسبه",
         prompt_template="پردازش کارکرد",
-        tool_chain=["karkard_process"],
+        tool_chain=["run_agent_script"],
     )
 
     db = MagicMock()
@@ -72,5 +72,5 @@ def test_action_run_invokes_orchestrator(monkeypatch: pytest.MonkeyPatch):
     assert result.output == "✅ از طریق LLM"
     mock_invoke.assert_awaited_once()
     call_input = mock_invoke.await_args[0][1].input
-    assert "karkard_process" in call_input
+    assert "run_agent_script" in call_input
     assert "function calling" in call_input

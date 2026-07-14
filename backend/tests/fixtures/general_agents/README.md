@@ -1,0 +1,1 @@
+# General agent fixtures (domain-neutral)\n\nRoles contract: instruction | input_sample | output_sample | runtime; optional pair_id.\npair1_*: multi-sheet xlsx. pair2_*: second multi-pair. orders_*: CSV.\n

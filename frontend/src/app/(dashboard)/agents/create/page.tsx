@@ -14,9 +14,11 @@ import {
   createAgentWithPermissions,
   checkAgentNameAvailable,
   fetchAgentBySlug,
+  fetchAgentFiles,
   fetchAgentPermissions,
   fetchAllAgents,
   fetchUsers,
+  planAgentPreflight,
   prepareAgentRuntime,
   replaceAgentPermissions,
   startAgentTraining,
@@ -37,11 +39,12 @@ import { handleApiError } from "@/lib/api-error-handler";
 import { PanelTransition } from "@/components/motion/transitions";
 import { KindPicker } from "@/components/agents/kind-picker";
 import { PrecisionPicker } from "@/components/agents/precision-picker";
+import { RuntimeBackendSelector, DEFAULT_RUNTIME, type AgentRuntimeConfig } from "@/components/agents/runtime-backend-selector";
 import { CapabilityToggles } from "@/components/agents/capability-toggles";
 import { WizardField } from "@/components/agents/wizard-field";
 import { WizardStepIntro } from "@/components/agents/wizard-step-intro";
 import { FIELD_HELP, WIZARD_STEP_HELP } from "@/lib/wizard-step-help";
-import { FilePolicyForm, validateFilePolicy } from "@/components/agents/file-policy-form";
+import { validateFilePolicy } from "@/components/agents/file-policy-form";
 import { ActionRepeater } from "@/components/agents/action-repeater";
 import { TemplateRepeater } from "@/components/agents/template-repeater";
 import { LinkedAgentsPicker } from "@/components/agents/linked-agents-picker";
@@ -54,9 +57,11 @@ import {
   widgetPlanToConfigJson,
   type AgentWidgetPlan,
 } from "@/lib/widget-plan";
+import { FileIntakePanel } from "@/components/agents/file-intake-panel";
 import { WizardIoPanel, type IoExamples } from "@/components/agents/wizard-io-panel";
 import { WizardProcessStepper } from "@/components/agents/wizard-process-stepper";
 import { WizardTemperatureField } from "@/components/agents/wizard-temperature-field";
+import { isServerInstructionFile } from "@/lib/agent-file-roles";
 import {
   WizardPostPublishPanel,
   postPublishStepReady,
@@ -69,11 +74,13 @@ import { AutosaveLine } from "./autosave-line";
 import { clearDraft, loadDraft, saveDraft } from "./draft";
 import { extractInstructionFileTexts } from "@/lib/instruction-file-text";
 import {
-  DEFAULT_FILE_POLICY,
+  DEFAULT_IO_POLICY,
   EMPTY_API_BINDINGS,
   filePolicyForCapabilities,
+  filePolicyForKind,
   FILE_POLICY_INSTRUCTION_ATTACHMENTS,
   resolvePublishFileConfig,
+  asIoFilePolicy,
   KIND_LABELS,
   KIND_PRESETS,
   estimateCostMultiplier,
@@ -107,15 +114,24 @@ import type {
   AgentPromptTemplate,
   Agent,
   ExecutionPrecision,
+  IoFilePolicy,
 } from "@/types";
 
 function buildWizardConfigJson(
   plan: AgentWidgetPlan,
   ioExamples: IoExamples,
-  precision: ExecutionPrecision
+  precision: ExecutionPrecision,
+  runtime?: AgentRuntimeConfig
 ): Record<string, unknown> {
   const base = widgetPlanToConfigJson(plan);
   const cfg: Record<string, unknown> = { ...base, execution_precision: precision };
+  if (runtime && runtime.execution_backend === "sandbox") {
+    cfg.runtime = {
+      execution_backend: "sandbox",
+      timeout_seconds: runtime.timeout_seconds,
+      memory_limit_mb: runtime.memory_limit_mb,
+    };
+  }
   const inputText = ioExamples.inputText.trim();
   const outputText = ioExamples.outputText.trim();
   if (!inputText && !outputText) return cfg;
@@ -139,9 +155,14 @@ function parseIoExamples(config: Record<string, unknown> | undefined): IoExample
 function wizardBootstrapPhase(stageId: string): LlmLoadingPhase {
   switch (stageId) {
     case "persist":
+    case "upload":
       return "preparing";
+    case "instructions":
+      return "thinking";
     case "runtime":
       return "tools";
+    case "planning":
+      return "thinking";
     case "training":
       return "generating";
     default:
@@ -151,14 +172,19 @@ function wizardBootstrapPhase(stageId: string): LlmLoadingPhase {
 
 function WizardBootstrapLoading({
   stageId,
+  detailLines,
   className,
 }: {
   stageId: string;
+  detailLines: string[];
   className?: string;
 }) {
   const label =
     WIZARD_BOOTSTRAP_STAGES.find((s) => s.id === stageId)?.label ??
     "در حال آماده‌سازی تست تعاملی…";
+  const log = detailLines.length
+    ? detailLines.join("\n")
+    : "در حال آماده‌سازی… جزئیات هر مرحله اینجا نمایش داده می‌شود.";
   return (
     <div data-ma-support="wizard-bootstrap-loading" className={className}>
       <LlmProcessIndicator
@@ -167,9 +193,13 @@ function WizardBootstrapLoading({
         statusMessage={label}
         thinkingActive
         thinkingOpen
-        thinkingContent="در حال ساخت ایجنت، آماده‌سازی محیط اجرا و راه‌اندازی تست تعاملی…"
-        thinkingSummary="آماده‌سازی ویزارد با هوش مصنوعی"
+        thinkingContent={log}
+        thinkingSummary={detailLines[detailLines.length - 1] || "آماده‌سازی ویزارد"}
       />
+      <p className="mt-2 text-center text-[11px] text-stone-400">
+        این مرحله چند درخواست پشت‌سرهم دارد (ذخیره، آپلود، کامپایل دستورالعمل، محیط اجرا).
+        ممکن است ۱–۳ دقیقه طول بکشد.
+      </p>
     </div>
   );
 }
@@ -201,13 +231,14 @@ export default function AgentWizardPage() {
   const [saving, setSaving] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapStage, setBootstrapStage] = useState(WIZARD_BOOTSTRAP_STAGES[0].id);
+  const [bootstrapLog, setBootstrapLog] = useState<string[]>([]);
   const prevStepRef = useRef(0);
 
   const [kind, setKind] = useState<AgentKind>("chat");
   const [executionPrecision, setExecutionPrecision] =
     useState<ExecutionPrecision>("autonomous");
   const [capabilities, setCapabilities] = useState<AgentCapabilities>(KIND_PRESETS.chat);
-  const [filePolicy, setFilePolicy] = useState<AgentFilePolicy>(DEFAULT_FILE_POLICY);
+  const [filePolicy, setFilePolicy] = useState<IoFilePolicy>(DEFAULT_IO_POLICY);
   const [linkPolicy, setLinkPolicy] = useState<AgentLinkPolicy>({
     max_depth: 3,
     default_requires_user_permission: true,
@@ -225,6 +256,7 @@ export default function AgentWizardPage() {
     model_name: "claude-opus-4-8",
     temperature: 0.2,
   });
+  const [runtimeCfg, setRuntimeCfg] = useState<AgentRuntimeConfig>({ ...DEFAULT_RUNTIME });
   const [variables, setVariables] = useState(() => [
     { key: "overtime_threshold", value: "12" },
     { key: "period", value: formatPersianMonthYear() },
@@ -291,14 +323,23 @@ export default function AgentWizardPage() {
       const v = a.config_json?.validation as {
         state?: string;
         planning?: { awaiting_answers?: boolean };
+        script_thinking?: string;
       } | undefined;
+      // Faster poll while automated validation is writing live thinking lines.
+      if (v?.state === "running" || v?.state === "pending_auto") return 1000;
       if (v?.planning?.awaiting_answers) return 2000;
-      if (v?.state === "running" || v?.state === "pending_auto") return 2000;
       if (v?.state === "training" || v?.state === "dashboard_review") return 3000;
-      if (a.status === "deploying") return 2000;
-      if (a.status === "active" && v?.state && v.state !== "done") return 2000;
+      if (a.status === "deploying") return 1500;
+      if (a.status === "active" && v?.state && v.state !== "done") return 1500;
       return false;
     },
+  });
+
+  const fetchExistingAgentId = editMode ? resumedAgent?.id ?? null : null;
+  const { data: existingAgentFiles = [] } = useQuery({
+    queryKey: ["agent-files", fetchExistingAgentId],
+    queryFn: () => fetchAgentFiles(fetchExistingAgentId as string),
+    enabled: Boolean(fetchExistingAgentId),
   });
 
   const activeAgent = publishedAgent ?? (!editMode ? resumedAgent ?? null : null);
@@ -328,7 +369,7 @@ export default function AgentWizardPage() {
       form: typeof form;
       kind: AgentKind;
       capabilities: AgentCapabilities;
-      filePolicy: AgentFilePolicy;
+      filePolicy: IoFilePolicy;
       actions: AgentAction[];
       templates: AgentPromptTemplate[];
       links: AgentLink[];
@@ -344,7 +385,7 @@ export default function AgentWizardPage() {
     if (d.form) setForm(d.form);
     if (d.kind) setKind(d.kind);
     if (d.capabilities) setCapabilities(d.capabilities);
-    if (d.filePolicy) setFilePolicy(d.filePolicy);
+    if (d.filePolicy) setFilePolicy(asIoFilePolicy(d.filePolicy));
     if (d.actions) setActions(d.actions);
     if (d.templates) setTemplates(d.templates);
     if (d.links) setLinks(d.links);
@@ -468,7 +509,7 @@ export default function AgentWizardPage() {
       });
       setKind(draft.kind);
       setCapabilities(draft.capabilities);
-      setFilePolicy(draft.filePolicy);
+      setFilePolicy(asIoFilePolicy(draft.filePolicy));
       setLinkPolicy(draft.linkPolicy);
       setActions(draft.actions);
       setTemplates(draft.templates);
@@ -558,7 +599,8 @@ export default function AgentWizardPage() {
   function resolvePublishConfig() {
     return resolvePublishFileConfig(
       capabilities,
-      filePolicy,
+      filePolicy.input,
+      filePolicy.output,
       stagedFiles.length,
       deriveAgentToolNames(actions)
     );
@@ -592,7 +634,7 @@ export default function AgentWizardPage() {
     }
     const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishConfig();
     if (publishCaps.file_upload_enabled) {
-      const policyErr = validateFilePolicy(publishFilePolicy);
+      const policyErr = validateFilePolicy(publishFilePolicy.input);
       if (policyErr) {
         return {
           title: "تنظیمات فایل",
@@ -626,7 +668,7 @@ export default function AgentWizardPage() {
       clampedCaps,
       deriveAgentToolNames(prepareActionsForPublish(actions)),
       prepareActionsForPublish(actions),
-      stagedFiles
+      [...existingAgentFiles, ...stagedFiles]
     );
     if (sampleBlock) return sampleBlock;
     if (agentLinksRequired(kind, clampedCaps)) {
@@ -664,7 +706,11 @@ export default function AgentWizardPage() {
       return [];
     });
     const fpPreset = filePolicyForCapabilities(clamped, form.tool_names);
-    if (fpPreset) setFilePolicy({ ...DEFAULT_FILE_POLICY, ...fpPreset });
+    if (fpPreset) {
+      setFilePolicy({ input: { ...DEFAULT_IO_POLICY.input, ...fpPreset }, output: filePolicy.output });
+    } else {
+      setFilePolicy(filePolicyForKind(next));
+    }
     if (!clamped.external_apis_enabled) {
       setApiBindings(EMPTY_API_BINDINGS);
     }
@@ -706,10 +752,13 @@ export default function AgentWizardPage() {
         instruction_files: await extractInstructionFileTexts(stagedFiles),
       });
       setForm((f) => ({ ...f, system_prompt: suggested }));
-    } catch {
+    } catch (err) {
+      const apiErr = handleApiError(err, { event: "wizard.suggest_prompt", log: true });
       await appAlert({
         title: "پیشنهاد متن",
-        message: "پیشنهاد متن با هوش مصنوعی ممکن نشد. اتصال API یا کلید OpenAI را بررسی کنید.",
+        message:
+          apiErr.message ||
+          "پیشنهاد متن با هوش مصنوعی ممکن نشد. درگاه مدل (gateway) را در تنظیمات بررسی کنید.",
         tone: "danger",
       });
     } finally {
@@ -748,6 +797,7 @@ export default function AgentWizardPage() {
       capabilities,
       filePolicy,
       stagedFiles,
+      existingAgentFiles,
       actions,
       links,
       widgetPlan,
@@ -772,6 +822,7 @@ export default function AgentWizardPage() {
     capabilities,
     filePolicy,
     stagedFiles,
+    existingAgentFiles,
     actions,
     links,
     widgetPlan,
@@ -791,6 +842,7 @@ export default function AgentWizardPage() {
       capabilities,
       filePolicy,
       stagedFiles,
+      existingAgentFiles,
       actions,
       links,
       widgetPlan,
@@ -807,6 +859,7 @@ export default function AgentWizardPage() {
       capabilities,
       filePolicy,
       stagedFiles,
+      existingAgentFiles,
       actions,
       links,
       widgetPlan,
@@ -823,14 +876,29 @@ export default function AgentWizardPage() {
     void fetchAgentBySlug(slug).then(setPublishedAgent);
   }
 
+  function pushBootstrap(stage: string, line: string) {
+    setBootstrapStage(stage);
+    setBootstrapLog((prev) => {
+      const next = [...prev, line];
+      return next.length > 24 ? next.slice(-24) : next;
+    });
+  }
+
   async function persistAgent(): Promise<Agent> {
     const { capabilities: publishCaps, filePolicy: publishFilePolicy } = resolvePublishConfig();
     const clampedCaps = resolvePublishCapabilities(publishCaps);
     const preparedActions = prepareActionsForPublish(actions);
     const toolNames = deriveAgentToolNames(preparedActions);
     const existing = publishedAgent ?? resumedAgent ?? null;
+    const hasInstructionAttachment = stagedFiles.some((f) =>
+      f.name.startsWith("instruction__")
+    );
+    // Force LLM recompile only when instruction files are attached. Plain system
+    // prompt text uses the backend fast path (no model round-trip).
+    const forceInstructionCompile = hasInstructionAttachment
 
     if (existing) {
+      pushBootstrap("persist", `به‌روزرسانی ایجنت «${existing.name || existing.slug}»…`);
       const updated = await updateAgent(existing.id, {
         ...form,
         kind,
@@ -843,24 +911,42 @@ export default function AgentWizardPage() {
         links,
         api_bindings: resolvePublishApiBindings(),
         knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
-        config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision),
+        config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision, runtimeCfg),
       });
       if (permissions.length) {
+        pushBootstrap("persist", `ذخیره ${permissions.length} دسترسی کاربر…`);
         await replaceAgentPermissions(updated.id, permissions);
       }
-      for (const file of stagedFiles) {
-        await uploadAgentFile(updated.id, file);
+      if (stagedFiles.length) {
+        pushBootstrap("upload", `آپلود ${stagedFiles.length} فایل نمونه…`);
+        let i = 0;
+        for (const file of stagedFiles) {
+          i += 1;
+          pushBootstrap("upload", `آپلود ${i}/${stagedFiles.length}: ${file.name}`);
+          await uploadAgentFile(updated.id, file);
+        }
+      } else {
+        pushBootstrap("upload", "فایل نمونه‌ای برای آپلود نیست — رد شد.");
       }
-      const hasInstructionAttachment = stagedFiles.some((f) =>
-        f.name.startsWith("instruction__")
-      );
-      await refreshAgentInstructions(updated.id, {
-        instruction_text: form.system_prompt || undefined,
-        force: hasInstructionAttachment || Boolean(form.system_prompt?.trim()),
-      });
+      if (hasInstructionAttachment || form.system_prompt?.trim()) {
+        pushBootstrap(
+          "instructions",
+          forceInstructionCompile
+            ? "کامپایل دستورالعمل با مدل (ممکن است کمی طول بکشد)…"
+            : "به‌روزرسانی دستورالعمل…",
+        );
+        await refreshAgentInstructions(updated.id, {
+          instruction_text: form.system_prompt || undefined,
+          force: forceInstructionCompile,
+        });
+        pushBootstrap("instructions", "کامپایل دستورالعمل تمام شد.");
+      } else {
+        pushBootstrap("instructions", "دستورالعمل جدیدی نیست — رد شد.");
+      }
       return updated;
     }
 
+    pushBootstrap("persist", `ساخت ایجنت جدید «${form.name.trim() || "بدون‌نام"}»…`);
     const agent = await createAgentWithPermissions({
       ...form,
       kind,
@@ -874,33 +960,57 @@ export default function AgentWizardPage() {
       permissions: permissions.length ? permissions : undefined,
       api_bindings: resolvePublishApiBindings(),
       knowledge_bindings: knowledgeBindings.dataset_ids.length ? knowledgeBindings : undefined,
-      config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision),
+      config_json: buildWizardConfigJson(widgetPlan, ioExamples, executionPrecision, runtimeCfg),
     });
-    for (const file of stagedFiles) {
-      await uploadAgentFile(agent.id, file);
+    pushBootstrap("persist", `ایجنت ساخته شد: ${agent.slug}`);
+
+    if (stagedFiles.length) {
+      pushBootstrap("upload", `آپلود ${stagedFiles.length} فایل نمونه…`);
+      let i = 0;
+      for (const file of stagedFiles) {
+        i += 1;
+        pushBootstrap("upload", `آپلود ${i}/${stagedFiles.length}: ${file.name}`);
+        await uploadAgentFile(agent.id, file);
+      }
+    } else {
+      pushBootstrap("upload", "فایل نمونه‌ای برای آپلود نیست — رد شد.");
     }
-    const hasInstructionAttachment = stagedFiles.some((f) => f.name.startsWith("instruction__"));
-    const compiled = await refreshAgentInstructions(agent.id, {
-      instruction_text: form.system_prompt || undefined,
-      force: hasInstructionAttachment || Boolean(form.system_prompt?.trim()),
-    });
-    const instructionMeta = compiled.config_json?.instruction_prompt as
-      | { status?: string; rule_count?: number }
-      | undefined;
-    if (hasInstructionAttachment && instructionMeta?.status === "failed") {
-      await appAlert({
-        title: "هشدار دستورالعمل",
-        message:
-          "فایل دستورالعمل پیوست شد اما کامپایل کامل نشد. قبل از تست، دوباره ذخیره کنید یا API مدل را بررسی کنید.",
-        tone: "danger",
+
+    if (hasInstructionAttachment || form.system_prompt?.trim()) {
+      pushBootstrap(
+        "instructions",
+        forceInstructionCompile
+          ? "کامپایل دستورالعمل با مدل (ممکن است کمی طول بکشد)…"
+          : "به‌روزرسانی دستورالعمل…",
+      );
+      const compiled = await refreshAgentInstructions(agent.id, {
+        instruction_text: form.system_prompt || undefined,
+        force: forceInstructionCompile,
       });
+      const instructionMeta = compiled.config_json?.instruction_prompt as
+        | { status?: string; rule_count?: number }
+        | undefined;
+      pushBootstrap(
+        "instructions",
+        `کامپایل تمام شد${instructionMeta?.rule_count != null ? ` (${instructionMeta.rule_count} قانون)` : ""}.`,
+      );
+      if (hasInstructionAttachment && instructionMeta?.status === "failed") {
+        await appAlert({
+          title: "هشدار دستورالعمل",
+          message:
+            "فایل دستورالعمل پیوست شد اما کامپایل کامل نشد. قبل از تست، دوباره ذخیره کنید یا API مدل را بررسی کنید.",
+          tone: "danger",
+        });
+      }
+    } else {
+      pushBootstrap("instructions", "دستورالعمل جدیدی نیست — رد شد.");
     }
+
     try {
       sessionStorage.setItem("ma_wizard_created_slug", agent.slug);
     } catch {
       /* private mode */
     }
-    // M1.5 hook point 1: persist verified slug + training phase to run state (API is authoritative).
     void patchRunState(
       { type: "wizard", key: wizardScopeKey() },
       { slug: agent.slug, phase: "training", payload: { agent_slug_verified: true, source_of_slug: "api" } }
@@ -935,23 +1045,73 @@ export default function AgentWizardPage() {
 
     const testingIdx = visibleSteps.indexOf("تست و انتشار");
     setBootstrapping(true);
+    setBootstrapLog([]);
     setBootstrapStage("persist");
+    pushBootstrap("persist", "شروع آماده‌سازی تست تعاملی…");
     try {
       let agent = publishedAgent ?? resumedAgent ?? null;
       if (editMode || !agent) {
         agent = await persistAgent();
+      } else {
+        pushBootstrap("persist", `ایجنت از قبل موجود است: ${agent.slug}`);
       }
-      setBootstrapStage("runtime");
+      pushBootstrap("runtime", "آماده‌سازی محیط اجرا و ابزارها…");
       agent = await prepareAgentRuntime(agent.id);
-      setBootstrapStage("training");
-      agent = await startAgentTraining(agent.id);
+      pushBootstrap("runtime", "محیط اجرا آماده شد.");
+
+      // Planning Q&A BEFORE interactive training chat — skip if already done.
+      const preV = (agent.config_json?.validation ?? {}) as {
+        state?: string;
+        planning?: { analysis?: string; awaiting_answers?: boolean; questions?: unknown[] };
+      };
+      const alreadyPlanned =
+        preV?.planning?.analysis &&
+        !preV?.planning?.awaiting_answers &&
+        (preV.planning.questions?.length ?? 0) >= 0;
+      if (alreadyPlanned) {
+        pushBootstrap("planning", "تحلیل از قبل انجام شده — رد می‌شود.");
+      } else {
+        pushBootstrap("planning", "تحلیل عمیق ایجنت — سؤالات قبل از تست تعاملی…");
+        agent = await planAgentPreflight(agent.id);
+      }
+      const v = (agent.config_json?.validation ?? {}) as {
+        state?: string;
+        planning?: { awaiting_answers?: boolean; questions?: unknown[] };
+      };
+      if (v?.planning?.awaiting_answers && (v.planning.questions ?? []).length > 0) {
+        pushBootstrap("planning", "سؤالات آماده — لطفاً پاسخ دهید.");
+        setPublishedAgent(agent);
+        if (testingIdx >= 0) setStep(testingIdx);
+        setBootstrapping(false);
+        return;
+      }
+      pushBootstrap("planning", "تحلیل کامل شد — بدون سؤال. شروع تست تعاملی…");
+
+      pushBootstrap("training", "راه‌اندازی جلسه تست تعاملی…");
+      // If already in training, skip start_training call (avoid 400 + extra LLM)
+      const inTraining =
+        (v?.state === "training" || v?.state === "planning") &&
+        agent.status !== "active";
+      if (inTraining) {
+        pushBootstrap("training", "جلسه تست تعاملی از قبل فعال است.");
+      } else {
+        agent = await startAgentTraining(agent.id);
+      }
+      pushBootstrap("training", "تست تعاملی آماده است.");
       setPublishedAgent(agent);
       if (testingIdx >= 0) setStep(testingIdx);
     } catch (e) {
       const apiErr = handleApiError(e, { event: "agent.wizard.bootstrap" });
-      const detail = apiErr.requestId
-        ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
-        : apiErr.message;
+      const isTimeout =
+        /timeout/i.test(apiErr.message) ||
+        apiErr.code === "ECONNABORTED" ||
+        apiErr.status === 0;
+      const detail = isTimeout
+        ? "آماده‌سازی بیش از حد طول کشید (timeout). معمولاً به‌خاطر تولید اسکریپت با مدل است؛ دوباره تلاش کنید. اگر باز هم رخ داد، فایل‌های نمونه را کم‌حجم‌تر کنید یا بعداً در تست خودکار صبر کنید."
+        : apiErr.requestId
+          ? `${apiErr.message}\n\nشناسه درخواست: ${apiErr.requestId}`
+          : apiErr.message;
+      pushBootstrap("persist", `خطا: ${isTimeout ? "timeout" : apiErr.message}`);
       await appAlert({
         title: "خطا در آماده‌سازی تست",
         message: detail,
@@ -1222,6 +1382,16 @@ export default function AgentWizardPage() {
 
                 {stepIndex === "دستورالعمل ایجنت" && (
                   <div className="space-y-6">
+                    {editMode && resumedAgent?.id ? (
+                      <FileIntakePanel
+                        agentId={resumedAgent.id}
+                        filePolicy={instructionFilePolicy}
+                        title="فایل‌های دستورالعمل ذخیره‌شده"
+                        description="docx/pdf/xlsx دستورالعمل که قبلاً روی این ایجنت آپلود شده‌اند. افزودن/حذف فوری است."
+                        emptyText="هنوز فایل دستورالعملی پیوست نشده"
+                        filter={(f) => isServerInstructionFile(f)}
+                      />
+                    ) : null}
                     <InstructionPromptField
                       label={FIELD_HELP.systemPrompt.label}
                       hint={FIELD_HELP.systemPrompt.hint}
@@ -1242,8 +1412,11 @@ export default function AgentWizardPage() {
                     {capabilities.templates_enabled && (
                       <TemplateRepeater templates={templates} onChange={setTemplates} />
                     )}
-                    <div className="space-y-3 border-t border-stone-100 pt-6">
-                      <p className="text-sm font-semibold text-stone-800">منابع دانش و API</p>
+                    <div className="border-t border-stone-100 pt-4">
+                      <p className="mb-2 text-xs font-semibold text-stone-600">
+                        منابع دانش و API
+                        <span className="ms-1 font-normal text-stone-400">(اختیاری)</span>
+                      </p>
                       <KnowledgeSourcePicker
                         knowledgeBindings={knowledgeBindings}
                         onKnowledgeChange={setKnowledgeBindings}
@@ -1260,8 +1433,10 @@ export default function AgentWizardPage() {
                       stagedFiles={stagedFiles}
                       onFilesChange={setStagedFiles}
                       filePolicy={filePolicy}
+                      onFilePolicyChange={setFilePolicy}
                       ioExamples={ioExamples}
                       onIoExamplesChange={setIoExamples}
+                      agentId={editMode ? resumedAgent?.id ?? publishedAgent?.id : null}
                     />
 
                     <details className="group rounded-2xl border border-stone-200 bg-white shadow-sm">
@@ -1320,9 +1495,6 @@ export default function AgentWizardPage() {
                             <ExternalApiManager compact />
                           </div>
                         )}
-                        {capabilities.file_upload_enabled && (
-                          <FilePolicyForm value={filePolicy} onChange={setFilePolicy} />
-                        )}
                       </div>
 
                       <div className="border-t border-stone-100 px-5 py-4">
@@ -1336,6 +1508,13 @@ export default function AgentWizardPage() {
                           value={executionPrecision}
                           onChange={setExecutionPrecision}
                         />
+                        <div className="border-t border-stone-100 px-5 py-4">
+                          <p className="mb-2 text-xs font-semibold text-stone-600">محیط اجرا (worker)</p>
+                          <RuntimeBackendSelector
+                            value={runtimeCfg}
+                            onChange={setRuntimeCfg}
+                          />
+                        </div>
                       </div>
                     </details>
                   </div>
@@ -1348,7 +1527,7 @@ export default function AgentWizardPage() {
                 {stepIndex === "دسترسی‌ها" && (
                   <div className="space-y-4">
                     {bootstrapping ? (
-                      <WizardBootstrapLoading stageId={bootstrapStage} />
+                      <WizardBootstrapLoading stageId={bootstrapStage} detailLines={bootstrapLog} />
                     ) : (
                       <>
                     <p className="text-sm leading-relaxed text-stone-600">
@@ -1412,7 +1591,7 @@ export default function AgentWizardPage() {
                 {stepIndex === "تست و انتشار" && (
                   <div className="space-y-4 text-sm">
                     {bootstrapping ? (
-                      <WizardBootstrapLoading stageId={bootstrapStage} />
+                      <WizardBootstrapLoading stageId={bootstrapStage} detailLines={bootstrapLog} />
                     ) : activeAgent ? (
                       <WizardPostPublishPanel
                         agent={activeAgent}
@@ -1459,4 +1638,5 @@ export default function AgentWizardPage() {
         </Card>
     </div>
   );
+
 }

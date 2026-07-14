@@ -15,6 +15,7 @@ import { ReviewAlertsPlanForm } from "@/components/agents/review-alerts-plan-for
 import { WizardField } from "@/components/agents/wizard-field";
 import { WizardStepIntro } from "@/components/agents/wizard-step-intro";
 import { WizardStagedFiles } from "@/components/agents/wizard-staged-files";
+import { FileIntakePanel } from "@/components/agents/file-intake-panel";
 import { PanelTransition } from "@/components/motion/transitions";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
@@ -32,7 +33,14 @@ import {
   filePolicyForCapabilities,
   FILE_POLICY_INSTRUCTION_ATTACHMENTS,
 } from "@/lib/agent-presets";
+import {
+  isServerInputSampleFile,
+  isServerInstructionFile,
+  isServerOutputSampleFile,
+} from "@/lib/agent-file-roles";
 import { fetchAllAgents, fetchUsers, suggestSystemPrompt } from "@/lib/api";
+import { handleApiError } from "@/lib/api-error-handler";
+import { appAlert } from "@/lib/app-dialog";
 import { extractInstructionFileTexts } from "@/lib/instruction-file-text";
 import { FIELD_HELP, WIZARD_STEP_HELP } from "@/lib/wizard-step-help";
 import type { Agent, AgentKind, AgentPermission } from "@/types";
@@ -121,6 +129,13 @@ export function AgentEditorForm({ agent, draft, onChange, disabled = false }: Pr
   }
 
   async function suggestPrompt() {
+    if (!draft.name.trim()) {
+      await appAlert({
+        title: "نام ایجنت",
+        message: "ابتدا نام ایجنت را وارد کنید.",
+      });
+      return;
+    }
     setSuggestingPrompt(true);
     try {
       const suggested = await suggestSystemPrompt({
@@ -134,6 +149,15 @@ export function AgentEditorForm({ agent, draft, onChange, disabled = false }: Pr
         instruction_files: await extractInstructionFileTexts(draft.stagedFiles),
       });
       patch({ systemPrompt: suggested });
+    } catch (err) {
+      const apiErr = handleApiError(err, { event: "editor.suggest_prompt", log: true });
+      await appAlert({
+        title: "پیشنهاد متن",
+        message:
+          apiErr.message ||
+          "پیشنهاد متن با هوش مصنوعی ممکن نشد. درگاه مدل (gateway) را در تنظیمات بررسی کنید.",
+        tone: "danger",
+      });
     } finally {
       setSuggestingPrompt(false);
     }
@@ -259,16 +283,42 @@ export function AgentEditorForm({ agent, draft, onChange, disabled = false }: Pr
                     value={draft.filePolicy}
                     onChange={(filePolicy) => patch({ filePolicy })}
                   />
+                  <FileIntakePanel
+                    agentId={agent.id}
+                    filePolicy={draft.filePolicy}
+                    title="فایل‌های نمونه ورودی ذخیره‌شده"
+                    description="نمونه‌های ورودی و پیوست‌های runtime که قبلاً روی این ایجنت آپلود شده‌اند."
+                    emptyText="هنوز فایل ورودی/پیوستی روی این ایجنت نیست"
+                    filter={(f) => isServerInputSampleFile(f)}
+                  />
+                  <FileIntakePanel
+                    agentId={agent.id}
+                    filePolicy={draft.filePolicy}
+                    title="فایل‌های نمونه خروجی ذخیره‌شده"
+                    description="نمونه خروجی طلایی (output-sample) که قبلاً آپلود شده است."
+                    emptyText="هنوز نمونه خروجی روی این ایجنت نیست"
+                    filter={(f) => isServerOutputSampleFile(f)}
+                  />
                   <WizardStagedFiles
                     files={draft.stagedFiles}
                     onChange={(stagedFiles) => patch({ stagedFiles })}
                     filePolicy={draft.filePolicy}
+                    title="صف آپلود (بعد از ذخیره)"
+                    description="فایل‌های جدیدی که فقط پس از زدن ذخیره در ویرایشگر به ایجنت اضافه می‌شوند."
                   />
                 </div>
               )}
 
               {stepIndex === "منطق و دستور" && (
                 <div className="space-y-6">
+                  <FileIntakePanel
+                    agentId={agent.id}
+                    filePolicy={instructionFilePolicy}
+                    title="فایل‌های دستورالعمل ذخیره‌شده"
+                    description="docx/pdf دستورالعمل که ایجنت باید خط‌به‌خط رعایت کند."
+                    emptyText="هنوز فایل دستورالعملی پیوست نشده"
+                    filter={(f) => isServerInstructionFile(f)}
+                  />
                   <InstructionPromptField
                     label={FIELD_HELP.systemPrompt.label}
                     hint={FIELD_HELP.systemPrompt.hint}

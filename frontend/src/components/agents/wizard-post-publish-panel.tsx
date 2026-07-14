@@ -1,10 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, ArrowRight, CheckCircle2, Code2, Wrench, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Brain,
+  CheckCircle2,
+  Code2,
+  Wrench,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   AgentClarificationQuestions,
@@ -26,6 +34,7 @@ import {
   TEST_STEPS,
   validationStepIndex,
   type ValidationReport,
+  type ValidationThinkingEntry,
 } from "@/lib/agent-testing-phase";
 import { resolveVisiblePlanningOnPage } from "@/lib/support-testing-actions";
 import type { Agent } from "@/types";
@@ -34,12 +43,68 @@ import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
 const PHASE_LABELS: Record<string, string> = {
   instruction_compile: "کامپایل دستورالعمل",
   tool_resolution: "بررسی ابزارها",
+  script_evaluate: "ارزیابی اسکریپت",
   script_generate: "تولید اسکریپت",
   script_verify: "تأیید اسکریپت",
   file_setup: "آماده‌سازی فایل",
-  planning: "تحلیل عمیق ایجنت",
+  planning: "تحلیل و سؤالات ایجنت",
   invoke: "تست گفت‌وگو",
+  training: "آموزش تعاملی",
+  runtime_prepare: "آماده‌سازی محیط اجرا",
+  starting: "شروع",
+  finishing: "جمع‌بندی",
+  done: "پایان",
+  error: "خطا",
+  dashboard_review: "بررسی پنل",
+  actions: "بررسی اقدامات",
 };
+
+function phaseLabel(phase: string): string {
+  if (PHASE_LABELS[phase]) return PHASE_LABELS[phase];
+  if (phase.startsWith("action:")) return `تست اقدام: ${phase.slice("action:".length)}`;
+  // ponytail: never leak the raw English backend token to the user. Default
+  // to a Persian generic instead of `phase`.
+  return "بررسی فرآیند";
+}
+
+function EstimateBanner({
+  activeStep,
+  isFileAgent,
+  validation,
+}: {
+  activeStep: number;
+  isFileAgent: boolean;
+  validation: ValidationReport | null;
+}) {
+  // Once the تست تعاملی interactive phase has completed and the automated
+  // validation is running, tell the user this takes a few minutes, that they
+  // can leave and come back, and that they'll be notified on completion.
+  const started =
+    validation?.state === "running" ||
+    validation?.state === "pending_auto" ||
+    (activeStep >= 2 && validation?.state !== "done" && validation?.state !== "error");
+  if (!started) return null;
+
+  // File agents (~script_evaluate + script_verify + invoke) take longer than
+  // pure-chat agents. Cap the estimate to a believable range.
+  const minutes = isFileAgent ? "۳ تا ۵" : "۱ تا ۳";
+
+  return (
+    <motion.div
+      role="status"
+      aria-live="polite"
+      className="mt-2 w-full rounded-xl border border-brand-200 bg-brand-50/60 px-4 py-3 text-right text-sm text-stone-700 shadow-card"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <p className="leading-relaxed">
+        این فرآیند ممکن است حدود <span className="font-bold text-brand-700">{minutes} دقیقه</span>{" "}
+        طول بکشد. می‌توانید صفحه را ببندید و بعداً بازگردید — با پایان کار به شما اعلام می‌شود.
+      </p>
+    </motion.div>
+  );
+}
 
 function isAwaitingPlanningAnswers(validation: ValidationReport | null): boolean {
   return Boolean(
@@ -56,6 +121,90 @@ function parseValidation(agent: Agent | undefined): ValidationReport | null {
   const raw = agent?.config_json?.validation;
   if (!raw || typeof raw !== "object") return null;
   return raw as ValidationReport;
+}
+
+function collectLiveThinking(validation: ValidationReport | null): {
+  headline: string;
+  lines: string[];
+} {
+  if (!validation) return { headline: "", lines: [] };
+  const log = (validation.thinking_log ?? [])
+    .map((e: ValidationThinkingEntry) => String(e?.text || "").trim())
+    .filter(Boolean);
+  const live = String(validation.script_thinking || validation.current_detail || "").trim();
+  const lines = [...log];
+  if (live && lines[lines.length - 1] !== live) lines.push(live);
+  const unique = lines.filter((line, i) => lines.indexOf(line) === i);
+  const headline = live || unique[unique.length - 1] || "";
+  return { headline, lines: unique.slice(-12) };
+}
+
+/** Always-visible activity panel; optional cursor-follow bubble while hovering the zone. */
+function LiveThinkingPanel({
+  validation,
+  phaseLabelText,
+}: {
+  validation: ValidationReport | null;
+  phaseLabelText: string;
+}) {
+  const zoneRef = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const { headline, lines } = useMemo(() => collectLiveThinking(validation), [validation]);
+  const body = headline || phaseLabelText || "در حال کار…";
+
+  function onMove(e: ReactMouseEvent) {
+    const el = zoneRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setCursor({ x: e.clientX - r.left, y: e.clientY - r.top });
+  }
+
+  return (
+    <div
+      ref={zoneRef}
+      className="relative w-full"
+      onMouseMove={onMove}
+      onMouseLeave={() => setCursor(null)}
+    >
+      <div className="w-full rounded-xl border border-brand-200 bg-white/95 px-3.5 py-3 text-right shadow-card">
+        <div className="flex items-center gap-1.5 border-b border-stone-100 pb-1.5">
+          <Brain className="h-3.5 w-3.5 text-brand-600" />
+          <span className="text-xs font-semibold text-brand-700">فعالیت زنده ایجنت</span>
+          <span className="ms-auto h-1.5 w-1.5 animate-pulse rounded-full bg-brand-500 motion-reduce:animate-none" />
+        </div>
+        <p className="mt-2 text-sm font-medium leading-relaxed text-stone-800">
+          {body}
+          <span className="ms-0.5 inline-block h-3.5 w-px animate-pulse bg-brand-600 align-middle motion-reduce:animate-none" />
+        </p>
+        {lines.length > 1 ? (
+          <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto border-t border-stone-100 pt-2 text-[11px] leading-relaxed text-stone-500">
+            {lines.map((line, i) => (
+              <li key={`${i}-${line.slice(0, 24)}`} className="flex gap-1.5">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-stone-300" />
+                <span className={i === lines.length - 1 ? "font-medium text-stone-700" : ""}>
+                  {line}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      {cursor ? (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute z-30 max-w-[min(18rem,calc(100%-1rem))] rounded-lg border border-brand-200 bg-stone-900 px-2.5 py-1.5 text-[11px] leading-snug text-white shadow-lg"
+          style={{
+            left: Math.min(Math.max(cursor.x + 12, 8), (zoneRef.current?.clientWidth ?? 320) - 8),
+            top: Math.max(cursor.y + 14, 8),
+            transform: "translateX(-50%)",
+          }}
+        >
+          {body}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function StepList({
@@ -112,12 +261,14 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
   const bootstrapStarted = useRef(false);
   const dashboardSkipStarted = useRef(false);
   const planningRefreshStarted = useRef(false);
+  const submittedAnswersRef = useRef<Set<string>>(new Set());
 
   const validation = parseValidation(agent);
   const phase = resolveTestingPhase(agent.status, validation);
   const failures = validation?.failures ?? [];
   const activeStep = validationStepIndex(validation);
-  const awaitingAnswers = isAwaitingPlanningAnswers(validation);
+  const awaitingAnswers =
+    isAwaitingPlanningAnswers(validation) && !submittedAnswersRef.current.has(agent.id);
   const needsPersianPlanningRefresh =
     awaitingAnswers && validation?.planning?.locale !== PLANNING_LOCALE;
   const planningAnalyzing = isPlanningAnalyzing(validation) || needsPersianPlanningRefresh;
@@ -128,6 +279,9 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
       ? (agent.config_json.workspace_script as {
           needed?: boolean;
           verified_at?: string;
+          synthesized?: boolean;
+          repair_attempts_used?: number;
+          last_verify_error?: string | null;
         })
       : null;
   const runtimePlan =
@@ -140,6 +294,7 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
 
   const handleSubmitAnswers = useCallback(
     async (answers: Record<string, string>) => {
+      submittedAnswersRef.current.add(agent.id);
       await submitValidationAnswers(agent.id, answers);
       onAgentRefresh();
     },
@@ -223,13 +378,33 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
     }
   }, [phase, qc]);
 
+  // Training step owns planning Q&A first (chips in chat), then free test chat.
+  const planningForTraining =
+    awaitingAnswers && planningQuestions.length > 0
+      ? {
+          questions: planningQuestions,
+          analysis: validation?.planning?.analysis,
+        }
+      : null;
   if (stepLabel === "تست تعاملی") {
     return (
       <div className="space-y-4">
-        <p className="text-sm text-stone-600">
-          یک سؤال نمونه بپرسید و شکل پاسخ را تأیید کنید. این مرحله نقش ایجنت را عوض نمی‌کند.
-        </p>
-        <AgentTrainingPanel agent={agent} onCompleted={onAgentRefresh} />
+        {planningForTraining ? (
+          <p className="text-sm text-stone-600">
+            چند سؤال کوتاه برای دقت بالاتر. هر سؤال را با گزینه‌اش پاسخ دهید، بعد می‌توانید
+            ایجنت را امتحان کنید.
+          </p>
+        ) : (
+          <p className="text-sm text-stone-600">
+            یک سؤال نمونه بپرسید و شکل پاسخ را تأیید کنید. این مرحله نقش ایجنت را عوض نمی‌کند.
+          </p>
+        )}
+        <AgentTrainingPanel
+          agent={agent}
+          onCompleted={onAgentRefresh}
+          planning={planningForTraining}
+          onPlanningAnswers={handleSubmitAnswers}
+        />
       </div>
     );
   }
@@ -290,7 +465,7 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
             <ul className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-stone-100 bg-stone-50/80 p-3 text-xs">
               {failures.map((f, i) => (
                 <li key={`${f.phase}-${i}`} className="rounded-lg bg-white px-3 py-2 text-stone-700">
-                  <span className="font-semibold">{PHASE_LABELS[f.phase] ?? f.phase}</span>
+                  <span className="font-semibold">{phaseLabel(f.phase)}</span>
                   <p className="mt-0.5">{f.message}</p>
                 </li>
               ))}
@@ -325,7 +500,7 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
               onSubmit={handleSubmitAnswers}
             />
           ) : (
-            <div className="flex flex-col items-center gap-3 py-2">
+            <div className="flex w-full flex-col items-center gap-3 py-2">
               <LoadingIndicator
                 size="panel"
                 stage={
@@ -333,15 +508,37 @@ export function WizardPostPublishPanel({ agent, stepLabel, onAgentRefresh }: Pro
                     ? needsPersianPlanningRefresh
                       ? "در حال بازسازی تحلیل به فارسی…"
                       : "در حال تحلیل عمیق ایجنت…"
-                    : `در حال ${PHASE_LABELS[validation?.current_phase ?? ""] ?? TEST_STEPS[activeStep] ?? "تست خودکار"}…`
+                    : `در حال ${phaseLabel(validation?.current_phase ?? "") || TEST_STEPS[activeStep] || "تست خودکار"}…`
                 }
                 detail={
-                  activeStep === 4
+                  validation?.script_thinking ||
+                  validation?.current_detail ||
+                  (activeStep === 4
                     ? "تست گفت‌وگو ممکن است چند دقیقه طول بکشد."
-                    : undefined
+                    : validation?.current_phase === "script_verify" &&
+                        workspaceScript?.last_verify_error
+                      ? `تلاش ${(workspaceScript.repair_attempts_used ?? 0) + 1} — ${workspaceScript.last_verify_error}`
+                      : undefined)
                 }
                 activeStageId={String(activeStep)}
                 stages={TEST_STEPS.map((label, i) => ({ id: String(i), label }))}
+              />
+              <LiveThinkingPanel
+                validation={validation}
+                phaseLabelText={
+                  planningAnalyzing
+                    ? needsPersianPlanningRefresh
+                      ? "در حال بازسازی تحلیل به فارسی…"
+                      : "در حال تحلیل عمیق ایجنت…"
+                    : phaseLabel(validation?.current_phase ?? "") ||
+                      TEST_STEPS[activeStep] ||
+                      "تست خودکار"
+                }
+              />
+              <EstimateBanner
+                activeStep={activeStep}
+                isFileAgent={Boolean(workspaceScript?.needed)}
+                validation={validation}
               />
             </div>
           )}
@@ -373,4 +570,5 @@ export function suggestPostPublishStep(agent: Agent): "تست تعاملی" | "�
   const phase = resolveTestingPhase(agent.status, validation);
   if (phase === "training") return "تست تعاملی";
   return "تست خودکار";
+
 }

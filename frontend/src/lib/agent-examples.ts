@@ -71,7 +71,7 @@ export const AGENT_EXAMPLES: AgentExample[] = [
   {
     id: "karkard",
     label: "محاسبه‌گر کارکرد (با فایل اکسل)",
-    summary: "Worker + آپلود فایل · ابزار karkard_process · شامل فایل اکسل نمونه",
+    summary: "Worker + آپلود فایل · ابزار run_agent_script · شامل فایل اکسل نمونه",
     kind: "worker",
     capabilities: {
       ...KIND_PRESETS.worker,
@@ -84,8 +84,8 @@ export const AGENT_EXAMPLES: AgentExample[] = [
       description: "پردازش فایل اکسل کارکرد ماهانه طبق دستورالعمل HR",
       department: "hr",
       system_prompt:
-        "تو دستیار محاسبه کارکرد هستی. فایل اکسل آپلودشده را با ابزار karkard_process پردازش کن و لینک خروجی نهایی را بده. هرگز از کاربر فایل نخواه؛ از آخرین فایل آپلودشده استفاده کن.",
-      tool_names: ["karkard_process"],
+        "تو دستیار محاسبه کارکرد هستی. فایل اکسل آپلودشده را با ابزار run_agent_script پردازش کن و لینک خروجی نهایی را بده. هرگز از کاربر فایل نخواه؛ از آخرین فایل آپلودشده استفاده کن.",
+      tool_names: ["run_agent_script"],
       model_name: "claude-opus-4-8",
       temperature: 0.2,
     },
@@ -93,14 +93,10 @@ export const AGENT_EXAMPLES: AgentExample[] = [
       action({
         slug: "process_karkard",
         label: "محاسبه کارکرد ماهانه",
-        description: "فایل خام کارکرد را پردازش و فایل نهایی HR را تولید می‌کند",
-        prompt_template: "فایل کارکرد آپلودشده را طبق دستورالعمل HR پردازش کن.",
-        tool_chain: ["karkard_process"],
-        input_schema: {
-          properties: {
-            jalali_year: { title: "سال شمسی", type: "integer", default: 1405 },
-          },
-        },
+        description: "فایل خام کارکرد را با اسکریپت ایجنت پردازش می‌کند",
+        prompt_template: "فایل کارکرد آپلودشده را طبق دستورالعمل HR با اسکریپت ایجنت پردازش کن.",
+        tool_chain: ["run_agent_script"],
+        input_schema: {},
       }),
     ],
     templates: [
@@ -216,8 +212,8 @@ export const AGENT_EXAMPLES: AgentExample[] = [
       description: "پردازش کارکرد، مقایسه با داده HR و صدور گزارش PDF برای تأیید حقوق",
       department: "hr",
       system_prompt:
-        "تو «بازرس پایان ماه» هستی. ابتدا فایل کارکرد آپلودشده را با karkard_process پردازش کن، سپس با hr_lookup داده پرسنلی را بگیر، مغایرت‌ها را شماره‌دار گزارش کن و در صورت سازگاری با report_generate (نوع payroll) گزارش PDF بساز. خروجی اجرایی بده، نه راهنما.",
-      tool_names: ["karkard_process", "hr_lookup", "report_generate"],
+        "تو «بازرس پایان ماه» هستی. ابتدا فایل کارکرد آپلودشده را با run_agent_script پردازش کن، سپس با hr_lookup داده پرسنلی را بگیر، مغایرت‌ها را شماره‌دار گزارش کن و در صورت سازگاری با report_generate (نوع payroll) گزارش PDF بساز. خروجی اجرایی بده، نه راهنما.",
+      tool_names: ["run_agent_script", "hr_lookup", "report_generate"],
       model_name: "claude-opus-4-8",
       temperature: 0.2,
     },
@@ -225,10 +221,10 @@ export const AGENT_EXAMPLES: AgentExample[] = [
       action({
         slug: "month_end_audit",
         label: "ممیزی پایان ماه",
-        description: "کارکرد را پردازش، با HR تطبیق و گزارش نهایی تولید می‌کند",
+        description: "کارکرد را با اسکریپت پردازش، با HR تطبیق و گزارش نهایی تولید می‌کند",
         prompt_template:
-          "فایل کارکرد آپلودشده را پردازش کن، با HR تطبیق بده، مغایرت‌ها را گزارش کن و در صورت امکان گزارش PDF حقوق بساز.",
-        tool_chain: ["karkard_process", "hr_lookup", "report_generate"],
+          "فایل کارکرد آپلودشده را با اسکریپت پردازش کن، با HR تطبیق بده، مغایرت‌ها را گزارش کن و در صورت امکان گزارش PDF حقوق بساز.",
+        tool_chain: ["run_agent_script", "hr_lookup", "report_generate"],
         input_schema: {
           period: { title: "دوره", type: "string", default: "1405/01" },
         },

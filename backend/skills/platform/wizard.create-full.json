@@ -1,0 +1,45 @@
+{
+  "slug": "wizard.create-full",
+  "name": "Build agent via full wizard bridge",
+  "name_fa": "ساخت ایجنت از طریق ویزارد کامل",
+  "description": "Walk all wizard steps from the create page through to test start using the wizard.create bridge, then continue testing.",
+  "scope": "platform",
+  "source": "imported",
+  "status": "active",
+  "version": 1,
+  "trigger": {
+    "phase_any": ["wizard_steps"],
+    "pathname_prefix": "/agents/create",
+    "run_state": { "name_present": true },
+    "min_autonomy_level": 2,
+    "priority": 90
+  },
+  "procedure": {
+    "label": "تکمیل ساخت ایجنت",
+    "steps": [
+      {
+        "type": "bridge",
+        "action": "wizard.create",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "پیمایش همه مراحل ویزارد تا شروع تست"
+      },
+      {
+        "type": "wait_for_path",
+        "pattern": "slug=",
+        "timeout_ms": 120000,
+        "label": "منتظر آماده‌سازی تست…"
+      },
+      {
+        "type": "wait",
+        "ms": 1200
+      },
+      {
+        "type": "bridge",
+        "action": "wizard.continue_testing",
+        "payload": { "agent_slug": "{{run_state.slug}}" },
+        "label": "آموزش تعاملی، طراحی پنل و تأیید"
+      }
+    ]
+  },
+  "content_md": "From the /agents/create page with a name present, run the wizard.create bridge to walk all steps to test start, wait for the slug query param, then continue testing."
+}

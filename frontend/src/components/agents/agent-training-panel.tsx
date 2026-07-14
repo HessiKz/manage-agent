@@ -35,11 +35,21 @@ import { formatAssistantOutput } from "@/lib/sanitize-chat-message";
 import { cn } from "@/lib/utils";
 import { Stagger, StaggerItem } from "@/components/motion/stagger";
 import type { Agent } from "@/types";
-import { LoadingIndicator, LoadingSpinner } from "@/components/loading";
+import { LoadingSpinner } from "@/components/loading";
+import {
+  AgentClarificationQuestions,
+  type PlanningQuestion,
+} from "@/components/agents/agent-clarification-questions";
 
 type Props = {
   agent: Agent;
   onCompleted?: () => void;
+  /** Planning Q&A inside training chat first; then free test chat. */
+  planning?: {
+    questions: PlanningQuestion[];
+    analysis?: string;
+  } | null;
+  onPlanningAnswers?: (answers: Record<string, string>) => Promise<void>;
 };
 
 function hasDialogue(messages: ChatMessage[]): boolean {
@@ -96,12 +106,18 @@ function TrainingProgressBar({
   );
 }
 
-export function AgentTrainingPanel({ agent, onCompleted }: Props) {
+export function AgentTrainingPanel({
+  agent,
+  onCompleted,
+  planning = null,
+  onPlanningAnswers,
+}: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatPrefill, setChatPrefill] = useState<string | null>(null);
+  const planningActive = Boolean(planning && (planning.questions?.length ?? 0) > 0);
   const finishRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const messagesRef = useRef(messages);
   const notesRef = useRef(notes);
@@ -320,29 +336,63 @@ export function AgentTrainingPanel({ agent, onCompleted }: Props) {
       <Stagger className="space-y-4" replayOnRoute>
         <StaggerItem variant="fadeIn">
           <div className="rounded-xl border border-brand-200 bg-brand-50/50 px-4 py-3 text-sm leading-relaxed text-stone-700">
-            <p className="font-semibold text-stone-900">ایجنت آماده است — یک بار امتحانش کنید</p>
+            <p className="font-semibold text-stone-900">
+              {planningActive
+                ? "ابتدا به چند سؤال کوتاه پاسخ دهید"
+                : "ایجنت آماده است — یک بار امتحانش کنید"}
+            </p>
             <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-stone-600">
-              <li>
-                <span className="font-medium text-stone-800">چه کار کنید:</span> یک سؤال نمونه
-                بپرسید یا فایل را از دکمه پیوست چت بفرستید.
-              </li>
-              <li>
-                <span className="font-medium text-stone-800">چه انتظاری داشته باشید:</span> پاسخ
-                بر اساس تنظیمات ویزارد است — اینجا فقط شکل و لحن را تأیید می‌کنید.
-              </li>
-              <li>
-                <span className="font-medium text-stone-800">چه زمانی ادامه دهید:</span> وقتی
-                پاسخ مناسب بود، دکمه پایین را بزنید تا پنل ساخته شود.
-              </li>
+              {planningActive ? (
+                <>
+                  <li>
+                    <span className="font-medium text-stone-800">چه کار کنید:</span> برای هر
+                    سؤال یک گزینه را بزنید (مثل Cursor) یا «سایر…» را انتخاب کنید.
+                  </li>
+                  <li>
+                    <span className="font-medium text-stone-800">بعد از آن:</span> با ثبت
+                    پاسخ‌ها، چت تست باز می‌شود تا شکل پاسخ را تأیید کنید.
+                  </li>
+                </>
+              ) : (
+                <>
+                  <li>
+                    <span className="font-medium text-stone-800">چه کار کنید:</span> یک سؤال
+                    نمونه بپرسید یا فایل را از دکمه پیوست چت بفرستید.
+                  </li>
+                  <li>
+                    <span className="font-medium text-stone-800">چه انتظاری داشته باشید:</span>{" "}
+                    پاسخ بر اساس تنظیمات ویزارد است — اینجا فقط شکل و لحن را تأیید می‌کنید.
+                  </li>
+                  <li>
+                    <span className="font-medium text-stone-800">چه زمانی ادامه دهید:</span>{" "}
+                    وقتی پاسخ مناسب بود، دکمه پایین را بزنید تا پنل ساخته شود.
+                  </li>
+                </>
+              )}
             </ul>
           </div>
         </StaggerItem>
 
-        <StaggerItem variant="slideUp">
-          <TrainingProgressBar steps={progressSteps} />
-        </StaggerItem>
+        {!planningActive && (
+          <StaggerItem variant="slideUp">
+            <TrainingProgressBar steps={progressSteps} />
+          </StaggerItem>
+        )}
 
-        {primaryPrompt && (
+        {planningActive && planning && onPlanningAnswers && (
+          <StaggerItem variant="scaleIn">
+            <div className="rounded-2xl border border-stone-200 bg-gradient-to-b from-stone-50/80 to-white p-4 shadow-sm">
+              <AgentClarificationQuestions
+                analysis={planning.analysis}
+                questions={planning.questions}
+                onSubmit={onPlanningAnswers}
+                variant="chat"
+              />
+            </div>
+          </StaggerItem>
+        )}
+
+        {!planningActive && primaryPrompt && (
           <StaggerItem variant="slideUp">
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -367,37 +417,41 @@ export function AgentTrainingPanel({ agent, onCompleted }: Props) {
           </StaggerItem>
         )}
 
-        <StaggerItem variant="scaleIn">
-          <CapabilityAwarePanel
-            agent={agent}
-            variant="full"
-            trainingMode
-            trainingLayout="split"
-            hideTemplatePicker
-            chatAutomationPrefix="training-chat"
-            chatMessages={messages}
-            onChatMessagesChange={setMessages}
-            onChatExchange={handleChatExchange}
-            onActionRunStart={handleActionRunStart}
-            initialMessage={chatPrefill}
-          />
-        </StaggerItem>
-
-        <StaggerItem variant="slideUp">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-stone-600">
-              یادداشت اختیاری — اگر می‌خواهید فرمت پاسخ را دقیق‌تر مشخص کنید
-            </span>
-            <textarea
-              data-ma-support="training-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              placeholder="مثلاً: پاسخ با عنوان شروع شود، سه bullet داشته باشد، لحن رسمی باشد."
-              className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50/50 px-3 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:border-brand-300 focus:outline-none focus:ring-2 focus:ring-brand-100"
+        {!planningActive && (
+          <StaggerItem variant="scaleIn">
+            <CapabilityAwarePanel
+              agent={agent}
+              variant="full"
+              trainingMode
+              trainingLayout="split"
+              hideTemplatePicker
+              chatAutomationPrefix="training-chat"
+              chatMessages={messages}
+              onChatMessagesChange={setMessages}
+              onChatExchange={handleChatExchange}
+              onActionRunStart={handleActionRunStart}
+              initialMessage={chatPrefill}
             />
-          </label>
-        </StaggerItem>
+          </StaggerItem>
+        )}
+
+        {!planningActive && (
+          <StaggerItem variant="slideUp">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-stone-600">
+                یادداشت اختیاری — اگر می‌خواهید فرمت پاسخ را دقیق‌تر مشخص کنید
+              </span>
+              <textarea
+                data-ma-support="training-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="مثلاً: پاسخ با عنوان شروع شود، سه bullet داشته باشد، لحن رسمی باشد."
+                className="w-full resize-none rounded-xl border border-stone-200 bg-stone-50/50 px-3 py-2.5 text-sm text-stone-800 placeholder:text-stone-400 focus:border-brand-300 focus:outline-none focus:ring-2 focus:ring-brand-100"
+              />
+            </label>
+          </StaggerItem>
+        )}
 
         {error && (
           <StaggerItem variant="fadeIn">
@@ -407,31 +461,33 @@ export function AgentTrainingPanel({ agent, onCompleted }: Props) {
           </StaggerItem>
         )}
 
-        <StaggerItem variant="scaleIn">
-          <Button
-            className="w-full"
-            data-ma-support="training-finish"
-            disabled={!canFinish || saving}
-            onClick={finishTraining}
-          >
-            {saving ? (
-              <>
-                <LoadingSpinner />
-                در حال ذخیره…
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="h-4 w-4" />
-                پاسخ مناسب بود — ادامه به تست خودکار
-              </>
-            )}
-          </Button>
-          <p className="mt-2 text-center text-xs text-stone-500">
-            {canFinish
-              ? "بعد از تأیید، تست خودکار اجرا می‌شود. ویجت پنل را بعداً از تب «پنل ایجنت» اضافه کنید."
-              : "حداقل یک گفتگو، اجرای اقدام، یا آپلود فایل لازم است."}
-          </p>
-        </StaggerItem>
+        {!planningActive && (
+          <StaggerItem variant="scaleIn">
+            <Button
+              className="w-full"
+              data-ma-support="training-finish"
+              disabled={!canFinish || saving}
+              onClick={finishTraining}
+            >
+              {saving ? (
+                <>
+                  <LoadingSpinner />
+                  در حال ذخیره…
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-4 w-4" />
+                  پاسخ مناسب بود — ادامه به تست خودکار
+                </>
+              )}
+            </Button>
+            <p className="mt-2 text-center text-xs text-stone-500">
+              {canFinish
+                ? "بعد از تأیید، تست خودکار اجرا می‌شود. ویجت پنل را بعداً از تب «پنل ایجنت» اضافه کنید."
+                : "حداقل یک گفتگو، اجرای اقدام، یا آپلود فایل لازم است."}
+            </p>
+          </StaggerItem>
+        )}
       </Stagger>
     </div>
   );

@@ -55,7 +55,7 @@ async def test_upgrade_preserves_customized_catalog_agent():
     agent.slug = "example-karkard"
     agent.kind = AgentKind.WORKER
     agent.status = AgentStatus.ACTIVE
-    agent.tool_names = ["karkard_process"]
+    agent.tool_names = ["run_agent_script"]
     agent.capabilities = {"actions_enabled": True}
     agent.system_prompt = "دستورالعمل سفارشی کاربر"
     agent.description = "توضیح سفارشی کاربر"
@@ -86,7 +86,7 @@ async def test_upgrade_marks_user_edited_prompt_as_customized():
     agent.slug = "example-karkard"
     agent.kind = AgentKind.WORKER
     agent.status = AgentStatus.ACTIVE
-    agent.tool_names = ["karkard_process"]
+    agent.tool_names = ["run_agent_script"]
     agent.capabilities = {"actions_enabled": True}
     agent.system_prompt = "دستورالعمل ادیت‌شده بدون فلگ"
     agent.description = "پردازش فایل اکسل کارکرد ماهانه طبق دستورالعمل HR (سوره)"

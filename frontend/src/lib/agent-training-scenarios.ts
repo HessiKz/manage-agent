@@ -5,6 +5,7 @@ import {
   resolveKarkardSampleFile,
   sampleVariablesForAction,
 } from "@/lib/agent-test-fixtures";
+import { filePolicyForRole } from "@/lib/agent-presets";
 import type {
   Agent,
   AgentAction,
@@ -284,7 +285,7 @@ export function buildTrainingAutoFinishPlan(
   };
 
   if (agent.capabilities.file_upload_enabled && agent.file_policy) {
-    const policy = agent.file_policy;
+    const policy = filePolicyForRole(agent.file_policy, "input");
     if (policyPrefersXlsx(policy)) {
       plan.resolveUpload = resolveKarkardSampleFile;
       plan.uploadLabel = "sample-karkard-raw.xlsx";

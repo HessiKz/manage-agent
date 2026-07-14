@@ -46,7 +46,7 @@ def test_system_prompt_lists_only_declared_tools():
     prompt = build_system_prompt(agent)
     assert "ts_alpha" in prompt
     # A non-declared domain tool must not leak into this agent's prompt.
-    assert "karkard_process" not in prompt
+    assert "run_agent_script" not in prompt
 
 
 def test_system_prompt_omits_tool_section_for_chat_agent():

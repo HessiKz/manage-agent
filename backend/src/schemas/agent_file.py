@@ -14,4 +14,6 @@ class AgentFileRead(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    role: str | None = None
+    pair_id: str | None = None
     created_at: datetime

@@ -23,7 +23,7 @@ function file(name: string): File {
 describe("agent-script-samples", () => {
   it("worker without builtin tool needs script samples", () => {
     expect(agentLikelyNeedsScript("worker", workerCaps, [], [])).toBe(true);
-    expect(agentLikelyNeedsScript("worker", workerCaps, ["karkard_process"], [])).toBe(false);
+    expect(agentLikelyNeedsScript("worker", workerCaps, ["run_agent_script"], [])).toBe(true);
   });
 
   it("detects missing input and output", () => {
@@ -44,6 +44,17 @@ describe("agent-script-samples", () => {
     ]);
     expect(block?.title).toBe("فایل‌های نمونه پردازش");
     expect(block?.message).toContain("فایل دستورالعمل");
-    expect(block?.message).toContain("فایل و سیاست");
+    expect(block?.message).toContain("ورودی و خروجی");
+  });
+
+  it("counts already-uploaded agent files (edit mode) toward samples", () => {
+    const existing = [
+      { name: "ورودی-نمونه.xlsx", role: "runtime" as const },
+      { name: "output-sample__out.xlsx", role: "output_sample" as const },
+    ];
+    expect(missingScriptSampleGaps(existing)).toEqual([]);
+    expect(
+      scriptSamplesPublishBlock("worker", workerCaps, [], [], existing)
+    ).toBeNull();
   });
 });

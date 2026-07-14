@@ -24,6 +24,7 @@ class ExecutionPath(str, enum.Enum):
     REACT = "react"
     SUPERVISOR = "supervisor"
     PLAIN_LLM = "plain_llm"
+    SANDBOX_JOB = "sandbox_job"
 
 
 _KIND_DEFAULT: dict[AgentKind, ExecutionPrecision] = {

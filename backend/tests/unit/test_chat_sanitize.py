@@ -32,3 +32,35 @@ def test_plain_text_unchanged():
 
 def test_empty_passthrough():
     assert sanitize_chat_output("") == ""
+
+
+def test_strips_mix_gateway_route_tag():
+    raw = "[MIX → se/pie/grok-4.5] سلام، وضعیت سیستم عادی است."
+    out = sanitize_chat_output(raw)
+    assert "MIX" not in out
+    assert "grok" not in out.lower()
+    assert "سلام" in out
+    assert "عادی" in out
+
+
+def test_strips_mix_tag_mid_stream_and_repeated():
+    raw = (
+        "[MIX → se/pie/grok-4.5]\n"
+        "خط اول\n"
+        "[MIX → other/model] خط دوم"
+    )
+    out = sanitize_chat_output(raw)
+    assert "MIX" not in out
+    assert "[" not in out or "خط" in out
+    assert "خط اول" in out
+    assert "خط دوم" in out
+
+
+def test_stream_partial_tag_held_back():
+    from src.core.chat_sanitize import strip_gateway_route_tags
+
+    partial = strip_gateway_route_tags("[MIX → se/pie", collapse=False)
+    assert "MIX" not in partial
+    assert partial == ""
+    full = strip_gateway_route_tags("[MIX → se/pie/grok-4.5] hi", collapse=False)
+    assert full == " hi" or full.strip() == "hi"
